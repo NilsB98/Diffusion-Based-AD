@@ -2,21 +2,18 @@
 import os.path
 import time
 
-from torch.utils.data import Subset, DataLoader
-from datasets import load_dataset
+from torch.utils.data import DataLoader
 import torch
-import numpy as np
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
+from pipe.train import train_step
+from pipe.validate import validate_step
 from scheduling_ddad import DDADScheduler
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, get_scheduler, DDIMScheduler
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-import torchvision.transforms.functional as F
-from torchvision.utils import make_grid
-from pipeline_reconstruction import ReconstructionPipeline
 from loader.loader import MVTecDataset
+from utils.visualize import generate_samples
 
 # dataset
 CHECKPOINT_DIR = "checkpoints"
@@ -29,122 +26,82 @@ EPOCHS = 25
 NUM_TRAIN_STEPS, BETA_SCHEDULE = 1000, "linear"
 RANDOM_FLIP = False
 SAVE_N_EPOCH = 10
-
-timestamp = str(time.time())[:11]
-writer = SummaryWriter(f'{LOG_DIR}/{RUN_NAME}_{timestamp}')
-
-augmentations = transforms.Compose(
-    [
-        transforms.Resize(TARGET_RESOLUTION, interpolation=transforms.InterpolationMode.BILINEAR),
-        transforms.RandomHorizontalFlip() if RANDOM_FLIP else transforms.Lambda(lambda x: x),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5]),
-    ]
-)
+TARGET_DEVICE = "cuda"
 
 
 def transform_images(imgs):
+    augmentations = transforms.Compose(
+        [
+            transforms.Resize(TARGET_RESOLUTION, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomHorizontalFlip() if RANDOM_FLIP else transforms.Lambda(lambda x: x),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ]
+    )
+
     return [augmentations(image.convert("RGB")) for image in imgs]
 
-
-# data loader
-data_train = MVTecDataset("C:/Users/nilsb/Documents/mvtec_anomaly_detection.tar", True, f"{DATASET_NAME}", ["good"],
-                          transform_images)
-train_loader = DataLoader(data_train, batch_size=8, shuffle=True)
-test_data = MVTecDataset("C:/Users/nilsb/Documents/mvtec_anomaly_detection.tar", False, f"{DATASET_NAME}", STATES,
-                         transform_images)
-test_loader = DataLoader(test_data, batch_size=8, shuffle=True)
-
-# set model, optimizer, scheduler
-model_args = {
-    "sample_size": TARGET_RESOLUTION,
-    "in_channels": 3,
-    "out_channels": 3,
-    "layers_per_block": 2,
-    "block_out_channels": (128, 128, 256, 256, 512, 512),
-    "down_block_types": (
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "AttnDownBlock2D",
-        "DownBlock2D",
-    ),
-    "up_block_types": (
-        "UpBlock2D",
-        "AttnUpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-    )
-}
-model = UNet2DModel(
-    **model_args
-)
-noise_scheduler = DDPMScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    weight_decay=1e-6,
-    lr=1e-4,
-    betas=(0.95, 0.999),
-    eps=1e-08,
-)
-
-# Initialize the learning rate scheduler
-lr_scheduler = get_scheduler(
-    "cosine",
-    optimizer=optimizer,
-    num_warmup_steps=500,
-    num_training_steps=(len(train_loader) * EPOCHS),
-)
-
-
-def generate_samples(model, noise_scheduler, plt_title, original_images):
-    pipeline = ReconstructionPipeline(
-        unet=model,
-        scheduler=noise_scheduler,
-    )
-
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    # run pipeline in inference (sample random noise and denoise)
-    images = pipeline(
-        generator=generator,
-        num_inference_steps=1000,
-        output_type="numpy",
-        original_images=original_images.to(model.device)
-    ).images
-
-    images_processed = (images * 255).round().astype("uint8")
-    images = torch.from_numpy(images_processed)
-    images = torch.permute(images, (0, 3, 1, 2))
-
-    original_images = transforms.Normalize([-0.5 * 2], [2])(original_images)
-    originals = (original_images * 255).round().type(torch.uint8)
-
-    grid = make_grid(torch.cat((images, originals), 0), 4)
-    show(grid, plt_title)
-    return grid
-
-
-def show(imgs, title):
-    if not isinstance(imgs, list):
-        imgs = [imgs]
-    fig, axs = plt.subplots(ncols=len(imgs), squeeze=False)
-    for i, img in enumerate(imgs):
-        img = img.detach()
-        img = F.to_pil_image(img)
-        axs[0, i].imshow(np.asarray(img))
-        axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
-    plt.title(title)
-    plt.show()
-
-
 def main():
-    # train loop
-    print("**** starting training *****")
+    # -------------      load data      ------------
+    data_train = MVTecDataset("C:/Users/nilsb/Documents/mvtec_anomaly_detection.tar", True, f"{DATASET_NAME}", ["good"],
+                              transform_images)
+    train_loader = DataLoader(data_train, batch_size=8, shuffle=True)
+    test_data = MVTecDataset("C:/Users/nilsb/Documents/mvtec_anomaly_detection.tar", False, f"{DATASET_NAME}", STATES,
+                             transform_images)
+    test_loader = DataLoader(test_data, batch_size=8, shuffle=True)
+
+    # ----------- set model, optimizer, scheduler -----------------
+    model_args = {
+        "sample_size": TARGET_RESOLUTION,
+        "in_channels": 3,
+        "out_channels": 3,
+        "layers_per_block": 2,
+        "block_out_channels": (128, 128, 256, 256, 512, 512),
+        "down_block_types": (
+            "DownBlock2D",
+            "DownBlock2D",
+            "DownBlock2D",
+            "DownBlock2D",
+            "AttnDownBlock2D",
+            "DownBlock2D",
+        ),
+        "up_block_types": (
+            "UpBlock2D",
+            "AttnUpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+        )
+    }
+    model = UNet2DModel(
+        **model_args
+    )
+
+    noise_scheduler = DDPMScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        weight_decay=1e-6,
+        lr=1e-4,
+        betas=(0.95, 0.999),
+        eps=1e-08,
+    )
+
+    lr_scheduler = get_scheduler(
+        "cosine",
+        optimizer=optimizer,
+        num_warmup_steps=500,
+        num_training_steps=(len(train_loader) * EPOCHS),
+    )
     loss_fn = torch.nn.MSELoss()
-    # check if checkpoint dir exist
+
+    # additional info/util
+    timestamp = str(time.time())[:11]
+    writer = SummaryWriter(f'{LOG_DIR}/{RUN_NAME}_{timestamp}')
+
+    # -----------------     train loop   -----------------
+    print("**** starting training *****")
+
     if not os.path.exists(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}"):
         os.makedirs(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}")
         config_file = open(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}/model_config.json", "w+")
@@ -153,7 +110,7 @@ def main():
 
     for epoch in range(EPOCHS):
         model.train()
-        model.to('cuda')
+        model.to(TARGET_DEVICE)
 
         progress_bar = tqdm(total=len(train_loader) + len(test_loader))
         progress_bar.set_description(f"Epoch {epoch}")
@@ -161,39 +118,17 @@ def main():
         running_loss_train = 0
 
         for btc_num, (batch, label) in enumerate(train_loader):
-            clean_imgs = batch
-            clean_imgs = clean_imgs.to('cuda')
-            noise = torch.randn(clean_imgs.shape, dtype=clean_imgs.dtype).to(clean_imgs.device)
+            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, NUM_TRAIN_STEPS)
 
-            timesteps = torch.randint(0, NUM_TRAIN_STEPS, (batch.shape[0],), device=clean_imgs.device).long()
-            noisy_images = noise_scheduler.add_noise(clean_imgs, noise, timesteps)
-
-            optimizer.zero_grad()
-
-            prediction = model(noisy_images, timesteps).sample
-
-            loss = loss_fn(prediction, noise)
-            loss.backward()
-            running_loss_train += loss.item()
-
-            optimizer.step()
-            lr_scheduler.step()
-
+            running_loss_train += loss
             progress_bar.update(1)
 
         running_loss_test = 0
         with torch.no_grad():
-
-            # run validation
             for btc_num, (batch, label, gt) in enumerate(test_loader):
-                clean_imgs = batch.to("cuda")
-                noise = torch.randn(clean_imgs.shape, dtype=clean_imgs.dtype).to(clean_imgs.device)
-                timesteps = torch.randint(0, NUM_TRAIN_STEPS, (batch.shape[0],), device=clean_imgs.device).long()
-                noisy_images = noise_scheduler.add_noise(clean_imgs, noise, timesteps)
+                loss = validate_step(model, batch, noise_scheduler, NUM_TRAIN_STEPS, loss_fn)
 
-                prediction = model(noisy_images, timesteps).sample
-                loss = loss_fn(prediction, noise)
-                running_loss_test += loss.item()
+                running_loss_test += loss
                 progress_bar.update(1)
 
             progress_bar.set_postfix_str(
@@ -218,6 +153,7 @@ def main():
 
     writer.add_hparams({'lr': -1, 'category': DATASET_NAME, 'defects': str(STATES)}, {'MSE': running_loss_test},
                        run_name='hp')
+
     writer.flush()
     writer.close()
 
