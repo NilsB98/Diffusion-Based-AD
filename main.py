@@ -9,8 +9,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from pipe.train import train_step
 from pipe.validate import validate_step
-from scheduling_ddad import DDADScheduler
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, get_scheduler, DDIMScheduler
+from schedulers.scheduling_ddpm import DBADScheduler
+from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
 from tqdm import tqdm
 from loader.loader import MVTecDataset
 from utils.visualize import generate_samples
@@ -18,14 +18,14 @@ from utils.visualize import generate_samples
 # dataset
 CHECKPOINT_DIR = "checkpoints"
 LOG_DIR = "logs"
-RUN_NAME = "hazelnut_128res"
-DATASET_NAME = "hazelnut"
-STATES = ["cut"]
+RUN_NAME = "cable_1"
+DATASET_NAME = "cable"
+STATES = ["cable_swap"]
 TARGET_RESOLUTION = 128
-EPOCHS = 25
+EPOCHS = 300
 NUM_TRAIN_STEPS, BETA_SCHEDULE = 1000, "linear"
 RANDOM_FLIP = False
-SAVE_N_EPOCH = 10
+SAVE_N_EPOCH = 50
 TARGET_DEVICE = "cuda"
 
 
@@ -101,10 +101,10 @@ def main():
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-
     if not os.path.exists(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}"):
         os.makedirs(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}")
         config_file = open(f"{CHECKPOINT_DIR}/{RUN_NAME}_{timestamp}/model_config.json", "w+")
+        # TODO possibly json.dumps(model_args, )
         config_file.write(str(model_args))
         config_file.close()
 
@@ -137,7 +137,7 @@ def main():
 
             if epoch % 100 == 0:
                 # generate images
-                noise_scheduler_inference = DDADScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
+                noise_scheduler_inference = DBADScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
                 train_grid = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
                                               next(iter(train_loader))[0])
                 test_grid = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",

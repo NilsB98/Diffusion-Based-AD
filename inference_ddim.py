@@ -1,28 +1,27 @@
 # imports
-from torch.utils.data import Subset, DataLoader
-from datasets import load_dataset
-import torch
-import numpy as np
-from torchvision import transforms
-
-from ddad.loader.loader import MVTecDataset
-from ddad.scheduling_ddad import DDADScheduler
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, get_scheduler
-from tqdm import tqdm
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
 import torchvision.transforms.functional as F
+from diffusers import UNet2DModel
+from torch.utils.data import DataLoader
+from torchvision import transforms
 from torchvision.utils import make_grid
-from pipeline_reconstruction import ReconstructionPipeline
+
+from loader.loader import MVTecDataset
+from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
+from schedulers.scheduling_ddim import DDIMScheduler
 
 # dataset
 TARGET_RESOLUTION = 128
-STEPS_TO_REGENERATE = 200       # 200
-RECON_WEIGHT = 15               # 15
-DATASET_NAME = "hazelnut"
-STATES = ["cut"]
-CHECKPOINT_NAME = "hazelnut_ep_300"
+STEPS_TO_REGENERATE = 300       # 200
+RECON_WEIGHT = 1               # 1
+DATASET_NAME = "cable"
+STATES = ["cable_swap"]
+CHECKPOINT_PATH = "cable_1_1692802490/epoch_300.pt"    # hazelnut_1_1692278910/epoch_300.pt
 NUM_TRAIN_STEPS, BETA_SCHEDULE = 1000, "linear"
 RANDOM_FLIP = False
+ETA = 0  # 1 = DDPM, 0 = DDIM (no noise added during denoising process)
 
 augmentations = transforms.Compose(
     [
@@ -47,6 +46,7 @@ test_data = MVTecDataset("C:/Users/nilsb/Documents/mvtec_anomaly_detection.tar",
 test_loader = DataLoader(test_data, batch_size=8, shuffle=False)
 
 # set model, optimizer, scheduler
+model_config = ""
 model = UNet2DModel(
     sample_size=TARGET_RESOLUTION,
     in_channels=3,
@@ -71,14 +71,14 @@ model = UNet2DModel(
     )
 )
 
-model.load_state_dict(torch.load(f"checkpoints/{CHECKPOINT_NAME}.pt"))
+model.load_state_dict(torch.load(f"checkpoints/{CHECKPOINT_PATH}"))
 model.eval()
 model.to("cuda")
-noise_scheduler = DDADScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
-
+# noise_scheduler = DBADScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE)
+noise_scheduler = DDIMScheduler()
 
 def generate_samples(model, noise_scheduler, plt_title, original_images):
-    pipeline = ReconstructionPipeline(
+    pipeline = DDIMReconstructionPipeline(
         unet=model,
         scheduler=noise_scheduler,
     )
@@ -86,11 +86,13 @@ def generate_samples(model, noise_scheduler, plt_title, original_images):
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
     # run pipeline in inference (sample random noise and denoise)
     images = pipeline(
+        batch_size=8,
         generator=generator,
-        num_inference_steps=1000,
-        output_type="numpy",
+        num_inference_steps=100,
         original_images=original_images.to(model.device),
-        start_at_timestep=STEPS_TO_REGENERATE
+        eta=ETA,
+        start_at_timestep=STEPS_TO_REGENERATE,
+        output_type="numpy",
     ).images
 
     images_processed = (images * 255).round().astype("int")
@@ -101,8 +103,8 @@ def generate_samples(model, noise_scheduler, plt_title, original_images):
     originals = (original_images * 255).round().type(torch.int32)
 
     diff_map = (originals - images) ** 2
-    # diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)   # per channel and image
-    diff_map = diff_map / torch.amax(diff_map, dim=(1, 2, 3)).reshape(-1, 1, 1, 1)  # per image
+    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)   # per channel and image
+    # diff_map = diff_map / torch.amax(diff_map, dim=(1, 2, 3)).reshape(-1, 1, 1, 1)  # per image
     diff_map = (diff_map * 255).round()
     diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
 
@@ -131,8 +133,7 @@ def main():
 
     with torch.no_grad():
         # validate and generate images
-        noise_scheduler_inference = DDADScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE,
-                                                  reconstruction_weight=RECON_WEIGHT)
+        noise_scheduler_inference = DDIMScheduler(NUM_TRAIN_STEPS, beta_schedule=BETA_SCHEDULE, reconstruction_weight=RECON_WEIGHT)
         # noise_scheduler_inference.set_timesteps(timesteps=list(range(0, 200, 1)).reverse())
         generate_samples(model, noise_scheduler_inference, f"Test samples ", next(iter(test_loader))[0])
 
