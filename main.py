@@ -11,12 +11,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 from pipe.train import train_step
 from pipe.validate import validate_step
-from schedulers.scheduling_ddpm import DBADScheduler
 from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
 from tqdm import tqdm
 from loader.loader import MVTecDataset
 from utils.visualize import generate_samples
 from dataclasses import dataclass
+from inference_ddim import generate_samples
+from schedulers.scheduling_ddim import DDIMScheduler
 
 
 @dataclass
@@ -33,6 +34,9 @@ class TrainArgs:
     train_steps: int
     beta_schedule: str
     device: str
+    reconstruction_weight: float
+    eta: float
+    batch_size: int
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -60,6 +64,12 @@ def parse_args() -> TrainArgs:
                         help='directory path to the (mvtec) dataset')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
+    parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
+                        help='Influence of the original sample during inference (doesnt affect training)')
+    parser.add_argument('--eta', type=float, default=0,
+                        help='Stochasticity parameter of DDIM, with eta=1 being DDPM and eta=0 meaning no randomness. Only used during inference, not training.')
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='Batch size during training')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -80,10 +90,10 @@ def main(args: TrainArgs):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
                               transform_images)
-    train_loader = DataLoader(data_train, batch_size=8, shuffle=True)
+    train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["good"],
                              transform_images)
-    test_loader = DataLoader(test_data, batch_size=8, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
     model_args = {
@@ -91,9 +101,8 @@ def main(args: TrainArgs):
         "in_channels": 3,
         "out_channels": 3,
         "layers_per_block": 2,
-        "block_out_channels": (128, 128, 256, 256, 512, 512),
+        "block_out_channels": (128, 128, 256, 128 * 3, 512),
         "down_block_types": (
-            "DownBlock2D",
             "DownBlock2D",
             "DownBlock2D",
             "DownBlock2D",
@@ -103,7 +112,6 @@ def main(args: TrainArgs):
         "up_block_types": (
             "UpBlock2D",
             "AttnUpBlock2D",
-            "UpBlock2D",
             "UpBlock2D",
             "UpBlock2D",
             "UpBlock2D",
@@ -172,11 +180,11 @@ def main(args: TrainArgs):
             if epoch % 100 == 0:
                 # generate images
                 # TODO use method from inference script
-                noise_scheduler_inference = DBADScheduler(args.train_steps, beta_schedule=args.beta_schedule)
-                train_grid = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
-                                              next(iter(train_loader))[0])
-                test_grid = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",
-                                             next(iter(test_loader))[0])
+                noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule, reconstruction_weight=args.reconstruction_weight)
+                train_grid, train_mask = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
+                                              next(iter(train_loader))[0], args.eta, steps_to_regenerate=300)
+                test_grid, test_mask = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",
+                                             next(iter(test_loader))[0], args.eta, steps_to_regenerate=300)
 
                 writer.add_image(f'Test samples {epoch=}', test_grid, epoch)
 
@@ -186,7 +194,7 @@ def main(args: TrainArgs):
         writer.add_scalar('Loss/train', running_loss_train, epoch)
         writer.add_scalar('Loss/test', running_loss_test, epoch)
 
-    writer.add_hparams({'lr': -1, 'category': args.mvtec_item}, {'MSE': running_loss_test},
+    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution, 'eta': args.eta, 'recon_weight': args.reconstruction_weight}, {'MSE': running_loss_test},
                        run_name='hp')
 
     writer.flush()
