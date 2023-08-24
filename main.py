@@ -1,8 +1,8 @@
 # imports
+import json
 import os.path
 import time
 import argparse
-from typing import List
 
 from torch.utils.data import DataLoader
 import torch
@@ -139,8 +139,7 @@ def main(args: TrainArgs):
     if not os.path.exists(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}"):
         os.makedirs(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}")
         config_file = open(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/model_config.json", "w+")
-        # TODO possibly json.dumps(model_args, )
-        config_file.write(str(model_args))
+        config_file.write(json.dumps(model_args))
         config_file.close()
 
     for epoch in range(args.epochs):
