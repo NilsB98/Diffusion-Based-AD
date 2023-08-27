@@ -14,6 +14,7 @@ from pipe.validate import validate_step
 from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
 from tqdm import tqdm
 from loader.loader import MVTecDataset
+from utils.files import save_args
 from utils.visualize import generate_samples
 from dataclasses import dataclass
 from inference_ddim import generate_samples
@@ -144,11 +145,7 @@ def main(args: TrainArgs):
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    if not os.path.exists(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}"):
-        os.makedirs(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}")
-        config_file = open(f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/model_config.json", "w+")
-        config_file.write(json.dumps(model_args))
-        config_file.close()
+    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
 
     for epoch in range(args.epochs):
         model.train()

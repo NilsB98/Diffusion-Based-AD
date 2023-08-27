@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 import torch
@@ -40,6 +41,8 @@ class MVTecDataset(Dataset):
             objective_path /= "test"
             gt_path = root_path / "ground_truth"
 
+        if states[0] == "all":
+            states = os.listdir(objective_path)
         for state in states:
             state_path = objective_path / state
             paths = [path for path in state_path.rglob("*.png")]
@@ -55,7 +58,7 @@ class MVTecDataset(Dataset):
 
         piece_imgs = [Image.open(img) for img in all_img_paths]
         tranformed_imgs:List[torch.Tensor] = self.transform(piece_imgs) if self.transform is not None else piece_imgs
-        gt_images = [Image.open(img) if img is not None else None for img in all_gt_paths]
+        gt_images = [Image.open(img) if img is not None else Image.new('L', tranformed_imgs[0].shape[1:]) for img in all_gt_paths]
         gt_images = self._transform_gt(gt_images, tranformed_imgs[0].shape[1])
         return tranformed_imgs, gt_images, all_states, piece_imgs
 

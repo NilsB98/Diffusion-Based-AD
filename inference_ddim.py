@@ -15,7 +15,9 @@ from torchvision.utils import make_grid
 from loader.loader import MVTecDataset
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 from schedulers.scheduling_ddim import DDIMScheduler
-from utils.visualize import generate_samples, generate_single_sample
+from utils.visualize import generate_samples, generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs
+from utils.files import save_args
+
 
 @dataclass
 class InferenceArgs:
@@ -33,7 +35,8 @@ class InferenceArgs:
     device: str
     dataset_path: str
     shuffle: bool
-    img_dir:str
+    img_dir: str
+
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -45,10 +48,12 @@ def parse_args() -> InferenceArgs:
                         help='directory path to store generated imgs')
     parser.add_argument('--checkpoint_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
-    parser.add_argument('--mvtec_item', type=str, required=True, choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
+    parser.add_argument('--mvtec_item', type=str, required=True,
+                        choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
+                                 "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
                         help='name of the item within the MVTec Dataset to train on')
-    parser.add_argument('--mvtec_item_states', type=str, nargs="+", required=True,
-                        help="States of the mvtec items that should be used. Available options depend on the selected item.")
+    parser.add_argument('--mvtec_item_states', type=str, nargs="+", default="all",
+                        help="States of the mvtec items that should be used. Available options depend on the selected item. Set to 'all' to include all states")
     parser.add_argument('--flip', action='store_true',
                         help='whether to augment training data with a flip')
     parser.add_argument('--steps_to_regenerate', type=int, default=300,
@@ -71,24 +76,12 @@ def parse_args() -> InferenceArgs:
     return InferenceArgs(**vars(parser.parse_args()))
 
 
-def show(imgs, title):
-    if not isinstance(imgs, list):
-        imgs = [imgs]
-    fig, axs = plt.subplots(ncols=len(imgs), squeeze=False)
-    for i, img in enumerate(imgs):
-        img = img.detach()
-        img = F.to_pil_image(img)
-        axs[0, i].imshow(np.asarray(img))
-        axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
-    plt.title(title)
-    plt.show()
-
-
 def main(args: InferenceArgs):
     # train loop
     print("**** starting inference *****")
     config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
     model_config = json.loads(config_file.read())
+    save_args(args, args.img_dir, "inference_args")
 
     augmentations = transforms.Compose(
         [
@@ -118,10 +111,17 @@ def main(args: InferenceArgs):
 
     with torch.no_grad():
         # validate and generate images
-        noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule, reconstruction_weight=args.reconstruction_weight)
+        noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule,
+                                                  reconstruction_weight=args.reconstruction_weight)
         for i, (img, state, gt) in enumerate(test_loader):
-            # generate_samples(model, noise_scheduler_inference, f"Test sample {i} - {state}", img, args.eta, args.steps_to_regenerate)
-            img, diffmap = generate_single_sample(model, noise_scheduler_inference, f"{i}_{state[0]}_{args.mvtec_item}", img, args.eta, args.steps_to_regenerate, img_dir=args.img_dir, show_plt=False)
+            original, reconstruction, diffmap = generate_single_sample(model, noise_scheduler_inference,
+                                                                       f"{i}_{state[0]}_{args.mvtec_item}", img,
+                                                                       args.eta, args.steps_to_regenerate,
+                                                                       img_dir=args.img_dir, show_plt=False)
+            plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
+                                     save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png")
+            plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
+                          save_to=f"{args.img_dir}/{i}_{state[0]}.png")
 
 
 if __name__ == '__main__':
