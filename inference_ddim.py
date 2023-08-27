@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from loader.loader import MVTecDataset
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 from schedulers.scheduling_ddim import DDIMScheduler
-from utils.visualize import generate_samples
+from utils.visualize import generate_samples, generate_single_sample
 
 @dataclass
 class InferenceArgs:
@@ -33,6 +33,7 @@ class InferenceArgs:
     device: str
     dataset_path: str
     shuffle: bool
+    img_dir:str
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -40,6 +41,8 @@ def parse_args() -> InferenceArgs:
                         help='directory path to store the checkpoints')
     parser.add_argument('--log_dir', type=str, default="logs",
                         help='directory path to store logs')
+    parser.add_argument('--img_dir', type=str, default="generated_imgs",
+                        help='directory path to store generated imgs')
     parser.add_argument('--checkpoint_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
     parser.add_argument('--mvtec_item', type=str, required=True, choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
@@ -102,7 +105,7 @@ def main(args: InferenceArgs):
     # data loader
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, args.mvtec_item_states,
                              transform_images)
-    test_loader = DataLoader(test_data, batch_size=8, shuffle=args.shuffle)
+    test_loader = DataLoader(test_data, batch_size=1, shuffle=args.shuffle)
 
     # set model, optimizer, scheduler
     model = UNet2DModel(
@@ -116,7 +119,9 @@ def main(args: InferenceArgs):
     with torch.no_grad():
         # validate and generate images
         noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule, reconstruction_weight=args.reconstruction_weight)
-        generate_samples(model, noise_scheduler_inference, f"Test samples ", next(iter(test_loader))[0], args.eta, args.steps_to_regenerate)
+        for i, (img, state, gt) in enumerate(test_loader):
+            # generate_samples(model, noise_scheduler_inference, f"Test sample {i} - {state}", img, args.eta, args.steps_to_regenerate)
+            img, diffmap = generate_single_sample(model, noise_scheduler_inference, f"{i}_{state[0]}_{args.mvtec_item}", img, args.eta, args.steps_to_regenerate, img_dir=args.img_dir, show_plt=False)
 
 
 if __name__ == '__main__':

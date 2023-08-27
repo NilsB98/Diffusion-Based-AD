@@ -129,7 +129,6 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
-        print(f"calculated time steps to use are: {self.scheduler.timesteps}")
 
         for t in self.progress_bar(self.scheduler.timesteps):
             if t > start_at_timestep:
