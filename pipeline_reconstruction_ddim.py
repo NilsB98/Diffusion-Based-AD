@@ -128,7 +128,7 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
         image = self.scheduler.add_noise(original_images, noise, starting_step)
 
         # set step values
-        self.scheduler.set_timesteps(num_inference_steps)
+        self.scheduler.set_timesteps(num_inference_steps, start_at_timestep)
 
         for t in self.progress_bar(self.scheduler.timesteps):
             if t > start_at_timestep:

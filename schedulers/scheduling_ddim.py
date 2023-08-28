@@ -190,6 +190,7 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
     def __init__(
         self,
         num_train_timesteps: int = 1000,
+        start_at_timestep: int = 300,
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
         beta_schedule: str = "linear",
@@ -302,13 +303,15 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
 
         return sample
 
-    def set_timesteps(self, num_inference_steps: int, device: Union[str, torch.device] = None):
+    def set_timesteps(self, num_inference_steps: int, start_at_timestep: int, device: Union[str, torch.device] = None):
         """
         Sets the discrete timesteps used for the diffusion chain. Supporting function to be run before inference.
 
         Args:
             num_inference_steps (`int`):
                 the number of diffusion steps used when generating samples with a pre-trained model.
+            start_at_timestep (`int`):
+                the timestep at which the DBAD scheduler should start to generate images.
         """
 
         if num_inference_steps > self.config.num_train_timesteps:
@@ -318,24 +321,31 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
                 f" maximal {self.config.num_train_timesteps} timesteps."
             )
 
+        if start_at_timestep > self.config.num_train_timesteps:
+            raise ValueError(
+                f"`start_at_timestep`: {start_at_timestep} cannot be larger than `self.config.train_timesteps`:"
+                f" {self.config.num_train_timesteps} as the unet model trained with this scheduler can only handle"
+                f" maximal {self.config.num_train_timesteps} timesteps."
+            )
+
         self.num_inference_steps = num_inference_steps
 
         # "linspace", "leading", "trailing" corresponds to annotation of Table 2. of https://arxiv.org/abs/2305.08891
         if self.config.timestep_spacing == "linspace":
             timesteps = (
-                np.linspace(0, self.config.num_train_timesteps - 1, num_inference_steps)
+                np.linspace(0, start_at_timestep - 1, num_inference_steps)
                 .round()[::-1]
                 .copy()
                 .astype(np.int64)
             )
         elif self.config.timestep_spacing == "leading":
-            step_ratio = self.config.num_train_timesteps // self.num_inference_steps
+            step_ratio = start_at_timestep // self.num_inference_steps
             # creates integer timesteps by multiplying by ratio
             # casting to int to avoid issues when num_inference_step is power of 3
             timesteps = (np.arange(0, num_inference_steps) * step_ratio).round()[::-1].copy().astype(np.int64)
             timesteps += self.config.steps_offset
         elif self.config.timestep_spacing == "trailing":
-            step_ratio = self.config.num_train_timesteps / self.num_inference_steps
+            step_ratio = start_at_timestep / self.num_inference_steps
             # creates integer timesteps by multiplying by ratio
             # casting to int to avoid issues when num_inference_step is power of 3
             timesteps = np.round(np.arange(self.config.num_train_timesteps, 0, -step_ratio)).astype(np.int64)
@@ -403,7 +413,7 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
         # - pred_prev_sample -> "x_t-1"
 
         # 1. get previous step value (=t-1)
-        prev_timestep = timestep - self.config.num_train_timesteps // self.num_inference_steps
+        prev_timestep = timestep - self.config.start_at_timestep // self.num_inference_steps
 
         # 2. compute alphas, betas
         alpha_prod_t = self.alphas_cumprod[timestep]

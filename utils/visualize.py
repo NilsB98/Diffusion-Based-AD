@@ -49,7 +49,7 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
 
     return grid_generated_imgs, grid_mask
 
-def generate_single_sample(model, noise_scheduler, plt_title, original_image, eta, steps_to_regenerate, img_dir=None, show_plt=True):
+def generate_single_sample(model, noise_scheduler, plt_title, original_image, eta, steps_to_regenerate, start_at_timestep, img_dir=None, show_plt=True):
     pipeline = DDIMReconstructionPipeline(
         unet=model,
         scheduler=noise_scheduler,
@@ -60,10 +60,10 @@ def generate_single_sample(model, noise_scheduler, plt_title, original_image, et
     reconstruction = pipeline(
         batch_size=1,
         generator=generator,
-        num_inference_steps=100,    # depending on this the number of skipped timesteps is calculated
+        num_inference_steps=steps_to_regenerate,    # depending on this the number of skipped timesteps is calculated
         original_images=original_image.to(model.device),
         eta=eta,
-        start_at_timestep=steps_to_regenerate,
+        start_at_timestep=start_at_timestep,
         output_type="numpy",
     ).images
 
@@ -77,7 +77,12 @@ def generate_single_sample(model, noise_scheduler, plt_title, original_image, et
     diff_map = (original - reconstruction) ** 2
     diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)   # per channel and image
     diff_map = (diff_map * 255).round()
+    # diff_r = diff_map[:, 0, :, :]
+    # diff_g = diff_map[:, 1, :, :]
+    # diff_b = diff_map[:, 2, :, :]
     diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
+    # plot_single_channel_imgs([diff_r, diff_g, diff_b, diff_map], ["r", "g", "b", "gray"], show_img=True)
+
 
     return original, reconstruction, diff_map
 

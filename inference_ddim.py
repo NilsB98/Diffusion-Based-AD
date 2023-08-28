@@ -21,7 +21,8 @@ from utils.files import save_args
 
 @dataclass
 class InferenceArgs:
-    steps_to_regenerate: int
+    num_inference_steps: int
+    start_at_timestep: int
     reconstruction_weight: float
     mvtec_item: str
     mvtec_item_states: list
@@ -56,7 +57,9 @@ def parse_args() -> InferenceArgs:
                         help="States of the mvtec items that should be used. Available options depend on the selected item. Set to 'all' to include all states")
     parser.add_argument('--flip', action='store_true',
                         help='whether to augment training data with a flip')
-    parser.add_argument('--steps_to_regenerate', type=int, default=300,
+    parser.add_argument('--num_inference_steps', type=int, default=30,
+                        help='At which timestep/how many timesteps should be regenerated')
+    parser.add_argument('--start_at_timestep', type=int, default=300,
                         help='At which timestep/how many timesteps should be regenerated')
     parser.add_argument('--train_steps', type=int, default=1000,
                         help='number of steps for the full diffusion process')
@@ -111,12 +114,12 @@ def main(args: InferenceArgs):
 
     with torch.no_grad():
         # validate and generate images
-        noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule,
+        noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
         for i, (img, state, gt) in enumerate(test_loader):
             original, reconstruction, diffmap = generate_single_sample(model, noise_scheduler_inference,
                                                                        f"{i}_{state[0]}_{args.mvtec_item}", img,
-                                                                       args.eta, args.steps_to_regenerate,
+                                                                       args.eta, args.num_inference_steps, args.start_at_timestep,
                                                                        img_dir=args.img_dir, show_plt=False)
             plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
                                      save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png")
