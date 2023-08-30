@@ -15,7 +15,6 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
     )
 
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    # run pipeline in inference (sample random noise and denoise)
     images = pipeline(
         batch_size=8,
         generator=generator,
