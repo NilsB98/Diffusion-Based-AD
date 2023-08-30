@@ -17,7 +17,6 @@ from loader.loader import MVTecDataset
 from utils.files import save_args
 from utils.visualize import generate_samples
 from dataclasses import dataclass
-from inference_ddim import generate_samples
 from schedulers.scheduling_ddim import DDIMScheduler
 
 
@@ -28,6 +27,8 @@ class TrainArgs:
     run_name: str
     mvtec_item: str
     flip: bool
+    rotate: bool
+    color_jitter: bool
     resolution: int
     epochs: int
     save_n_epochs: int
@@ -39,6 +40,7 @@ class TrainArgs:
     eta: float
     batch_size: int
 
+
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
@@ -47,7 +49,9 @@ def parse_args() -> TrainArgs:
                         help='directory path to store logs')
     parser.add_argument('--run_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
-    parser.add_argument('--mvtec_item', type=str, required=True, choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
+    parser.add_argument('--mvtec_item', type=str, required=True,
+                        choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
+                                 "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
                         help='name of the item within the MVTec Dataset to train on')
     parser.add_argument('--resolution', type=int, default=128,
                         help='resolution of the images to generate (dataset will be resized to this resolution during training)')
@@ -55,6 +59,10 @@ def parse_args() -> TrainArgs:
                         help='epochs to train for')
     parser.add_argument('--flip', action='store_true',
                         help='whether to augment training data with a flip')
+    parser.add_argument('--rotate', type=float, default=0,
+                        help='degree of rotation to augment training data with')
+    parser.add_argument('--color_jitter', type=float, default=0,
+                        help='amount of color jitter to augment training data with')
     parser.add_argument('--save_n_epochs', type=int, default=50,
                         help='write a checkpoint every n-th epoch')
     parser.add_argument('--train_steps', type=int, default=1000,
@@ -75,11 +83,10 @@ def parse_args() -> TrainArgs:
     return TrainArgs(**vars(parser.parse_args()))
 
 
-def transform_images(imgs):
+def transform_imgs_test(imgs):
     augmentations = transforms.Compose(
         [
             transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -87,13 +94,29 @@ def transform_images(imgs):
 
     return [augmentations(image.convert("RGB")) for image in imgs]
 
+
+def transform_imgs_train(imgs):
+    augmentations = transforms.Compose(
+        [
+            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
+            transforms.RandomRotation(args.rotate),
+            transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ]
+    )
+
+    return [augmentations(image.convert("RGB")) for image in imgs]
+
+
 def main(args: TrainArgs):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
-                              transform_images)
+                              transform_imgs_train)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["good"],
-                             transform_images)
+                             transform_imgs_test)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
@@ -102,7 +125,7 @@ def main(args: TrainArgs):
         "in_channels": 3,
         "out_channels": 3,
         "layers_per_block": 2,
-        "block_out_channels": (128, 128, 256, 128 * 3, 512),
+        "block_out_channels": (128, 128, 256, 384, 512),
         "down_block_types": (
             "DownBlock2D",
             "DownBlock2D",
@@ -177,11 +200,14 @@ def main(args: TrainArgs):
             if epoch % 100 == 0:
                 # generate images
                 # TODO use method from inference script
-                noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule, reconstruction_weight=args.reconstruction_weight)
+                noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule,
+                                                          reconstruction_weight=args.reconstruction_weight)
                 train_grid, train_mask = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
-                                              next(iter(train_loader))[0], args.eta, steps_to_regenerate=20, start_at_timestep=200)
+                                                          next(iter(train_loader))[0], args.eta, steps_to_regenerate=20,
+                                                          start_at_timestep=200)
                 test_grid, test_mask = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",
-                                             next(iter(test_loader))[0], args.eta, steps_to_regenerate=20, start_at_timestep=200)
+                                                        next(iter(test_loader))[0], args.eta, steps_to_regenerate=20,
+                                                        start_at_timestep=200)
 
                 writer.add_image(f'Test samples {epoch=}', test_grid, epoch)
 
@@ -191,7 +217,8 @@ def main(args: TrainArgs):
         writer.add_scalar('Loss/train', running_loss_train, epoch)
         writer.add_scalar('Loss/test', running_loss_test, epoch)
 
-    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution, 'eta': args.eta, 'recon_weight': args.reconstruction_weight}, {'MSE': running_loss_test},
+    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution, 'eta': args.eta,
+                        'recon_weight': args.reconstruction_weight}, {'MSE': running_loss_test},
                        run_name='hp')
 
     writer.flush()
