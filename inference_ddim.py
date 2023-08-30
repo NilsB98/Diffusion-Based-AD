@@ -33,6 +33,7 @@ class InferenceArgs:
     dataset_path: str
     shuffle: bool
     img_dir: str
+    plt_imgs: bool
 
 
 def parse_args() -> InferenceArgs:
@@ -71,6 +72,8 @@ def parse_args() -> InferenceArgs:
                         help='Stochasticity parameter of DDIM, with eta=1 being DDPM and eta=0 meaning no randomness')
     parser.add_argument('--shuffle', action='store_true',
                         help='Shuffle the items in the dataset')
+    parser.add_argument('--plt_imgs', action='store_true',
+                        help='Plot the images with matplot lib. I.e. call plt.show()')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -117,9 +120,9 @@ def main(args: InferenceArgs, writer: SummaryWriter):
                                                                                 args.eta, args.num_inference_steps,
                                                                                 args.start_at_timestep)
             plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
-                                     save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png")
+                                     save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png", show_img=args.plt_imgs)
             plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
-                          save_to=f"{args.img_dir}/{i}_{state[0]}.png")
+                          save_to=f"{args.img_dir}/{i}_{state[0]}.png", show_img=args.plt_imgs)
 
             writer.add_images(f"{i}_{state[0]}", torch.concat([original.to(torch.uint8)] + history + [gray_to_rgb(diffmap), gray_to_rgb(gt * 255).to(torch.uint8)]))
 
