@@ -8,7 +8,7 @@ import torchvision.transforms.functional as F
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
 
-def generate_samples(model, noise_scheduler, plt_title, original_images, eta, steps_to_regenerate, show_plt=True):
+def generate_samples(model, noise_scheduler, plt_title, original_images, eta, steps_to_regenerate, start_at_timestep, show_plt=True):
     pipeline = DDIMReconstructionPipeline(
         unet=model,
         scheduler=noise_scheduler,
@@ -19,10 +19,10 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
     images = pipeline(
         batch_size=8,
         generator=generator,
-        num_inference_steps=100,    # depending on this the number of skipped timesteps is calculated
+        num_inference_steps=steps_to_regenerate,
         original_images=original_images.to(model.device),
         eta=eta,
-        start_at_timestep=steps_to_regenerate,
+        start_at_timestep=start_at_timestep,
         output_type="numpy",
     ).images
 
@@ -34,7 +34,7 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
     originals = (original_images * 255).round().type(torch.int32)
 
     diff_map = (originals - images) ** 2
-    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)   # per channel and image
+    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
     diff_map = (diff_map * 255).round()
     diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
 
@@ -49,7 +49,8 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
 
     return grid_generated_imgs, grid_mask
 
-def generate_single_sample(model, noise_scheduler, plt_title, original_image, eta, steps_to_regenerate, start_at_timestep, img_dir=None, show_plt=True):
+
+def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to_regenerate, start_at_timestep):
     pipeline = DDIMReconstructionPipeline(
         unet=model,
         scheduler=noise_scheduler,
@@ -57,15 +58,17 @@ def generate_single_sample(model, noise_scheduler, plt_title, original_image, et
 
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
     # run pipeline in inference (sample random noise and denoise)
-    reconstruction = pipeline(
+    pipe_output = pipeline(
         batch_size=1,
         generator=generator,
-        num_inference_steps=steps_to_regenerate,    # depending on this the number of skipped timesteps is calculated
+        num_inference_steps=steps_to_regenerate,
         original_images=original_image.to(model.device),
         eta=eta,
         start_at_timestep=start_at_timestep,
         output_type="numpy",
-    ).images
+    )
+    reconstruction = pipe_output.images
+    history = pipe_output.history
 
     images_processed = (reconstruction * 255).round().astype("int")
     reconstruction = torch.from_numpy(images_processed)
@@ -75,16 +78,13 @@ def generate_single_sample(model, noise_scheduler, plt_title, original_image, et
     original = (original_image * 255).round().type(torch.int32)
 
     diff_map = (original - reconstruction) ** 2
-    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)   # per channel and image
+    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
     diff_map = (diff_map * 255).round()
-    # diff_r = diff_map[:, 0, :, :]
-    # diff_g = diff_map[:, 1, :, :]
-    # diff_b = diff_map[:, 2, :, :]
     diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
-    # plot_single_channel_imgs([diff_r, diff_g, diff_b, diff_map], ["r", "g", "b", "gray"], show_img=True)
 
+    history = [output_to_img(output) for output in history]
 
-    return original, reconstruction, diff_map
+    return original, reconstruction, diff_map, history
 
 
 def plot_single_channel_imgs(imgs, titles, save_to=None, show_img=False):
@@ -130,3 +130,14 @@ def show(imgs, title):
         axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
     plt.title(title)
     plt.show()
+
+
+def output_to_img(output):
+    img = (output * 255).round().astype("int")
+    img = torch.from_numpy(img)
+    img = torch.permute(img, (0, 3, 1, 2)).to(torch.uint8)
+    return img
+
+
+def gray_to_rgb(image: torch.Tensor):
+    return image.repeat((1, 3, 1, 1))

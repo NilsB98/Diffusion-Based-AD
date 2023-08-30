@@ -1,22 +1,18 @@
 # imports
 import argparse
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
-import torchvision.transforms.functional as F
 from diffusers import UNet2DModel
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
-from torchvision.utils import make_grid
 
 from loader.loader import MVTecDataset
-from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 from schedulers.scheduling_ddim import DDIMScheduler
-from utils.visualize import generate_samples, generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs
 from utils.files import save_args
+from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
 
 
 @dataclass
@@ -79,7 +75,7 @@ def parse_args() -> InferenceArgs:
     return InferenceArgs(**vars(parser.parse_args()))
 
 
-def main(args: InferenceArgs):
+def main(args: InferenceArgs, writer: SummaryWriter):
     # train loop
     print("**** starting inference *****")
     config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
@@ -117,16 +113,18 @@ def main(args: InferenceArgs):
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
         for i, (img, state, gt) in enumerate(test_loader):
-            original, reconstruction, diffmap = generate_single_sample(model, noise_scheduler_inference,
-                                                                       f"{i}_{state[0]}_{args.mvtec_item}", img,
-                                                                       args.eta, args.num_inference_steps, args.start_at_timestep,
-                                                                       img_dir=args.img_dir, show_plt=False)
+            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
+                                                                                args.eta, args.num_inference_steps,
+                                                                                args.start_at_timestep)
             plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
                                      save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png")
             plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
                           save_to=f"{args.img_dir}/{i}_{state[0]}.png")
 
+            writer.add_images(f"{i}_{state[0]}", torch.concat([original.to(torch.uint8)] + history + [gray_to_rgb(diffmap), gray_to_rgb(gt * 255).to(torch.uint8)]))
+
 
 if __name__ == '__main__':
     args: InferenceArgs = parse_args()
-    main(args)
+    writer = SummaryWriter(f'{args.log_dir}/inference')
+    main(args, writer)

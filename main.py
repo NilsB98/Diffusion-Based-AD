@@ -179,9 +179,9 @@ def main(args: TrainArgs):
                 # TODO use method from inference script
                 noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule, reconstruction_weight=args.reconstruction_weight)
                 train_grid, train_mask = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
-                                              next(iter(train_loader))[0], args.eta, steps_to_regenerate=300)
+                                              next(iter(train_loader))[0], args.eta, steps_to_regenerate=20, start_at_timestep=200)
                 test_grid, test_mask = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",
-                                             next(iter(test_loader))[0], args.eta, steps_to_regenerate=300)
+                                             next(iter(test_loader))[0], args.eta, steps_to_regenerate=20, start_at_timestep=200)
 
                 writer.add_image(f'Test samples {epoch=}', test_grid, epoch)
 

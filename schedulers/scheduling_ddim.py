@@ -462,7 +462,7 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
         prev_sample = alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
 
         initial_coeff = t * self.reconstruction_weight / 1000
-        if (t < 0):
+        if t < 0:
             initial_coeff = 0
 
         prev_sample = (1 - initial_coeff) * prev_sample + initial_coeff * original_images

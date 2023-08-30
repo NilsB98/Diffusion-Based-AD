@@ -16,8 +16,9 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 
-from diffusers.utils import randn_tensor
+from diffusers.utils import randn_tensor, numpy_to_pil
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from utils.pipeline_utils import DBADPipelineOutput
 
 
 class DDIMReconstructionPipeline(DiffusionPipeline):
@@ -129,10 +130,9 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps, start_at_timestep)
+        history = []
 
         for t in self.progress_bar(self.scheduler.timesteps):
-            if t > start_at_timestep:
-                continue
             # 1. predict noise model_output
             model_output = self.unet(image, t).sample
 
@@ -144,12 +144,20 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 generator=generator
             ).prev_sample
 
-        image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.cpu().permute(0, 2, 3, 1).numpy()
-        if output_type == "pil":
-            image = self.numpy_to_pil(image)
+            image_cp = post_process_img(image, output_type)
+            history.append(image_cp)
 
         if not return_dict:
-            return (image,)
+            return image_cp, history
 
-        return ImagePipelineOutput(images=image)
+        return DBADPipelineOutput(images=image_cp, history=history)
+
+
+def post_process_img(image, output_type):
+    image_cp = (image / 2 + 0.5).clamp(0, 1)
+    image_cp = image_cp.cpu().permute(0, 2, 3, 1).numpy()
+
+    if output_type == "pil":
+        image_cp = numpy_to_pil(image_cp)
+
+    return image_cp
