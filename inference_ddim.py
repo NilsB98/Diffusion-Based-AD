@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
+import utils.anomalies
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
@@ -119,12 +120,14 @@ def main(args: InferenceArgs, writer: SummaryWriter):
             original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
                                                                                 args.eta, args.num_inference_steps,
                                                                                 args.start_at_timestep)
-            plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
+            anomaly_map = utils.anomalies.diff_map_to_anomaly_map(diffmap, 100)
+            plot_single_channel_imgs([gt, diffmap, anomaly_map], ["ground truth", "heatmap", "anomaly-map"],
                                      save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png", show_img=args.plt_imgs)
             plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
                           save_to=f"{args.img_dir}/{i}_{state[0]}.png", show_img=args.plt_imgs)
 
-            writer.add_images(f"{i}_{state[0]}", torch.concat([original.to(torch.uint8)] + history + [gray_to_rgb(diffmap), gray_to_rgb(gt * 255).to(torch.uint8)]))
+            if writer is not None:
+                writer.add_images(f"{i}_{state[0]}", torch.concat([original.to(torch.uint8)] + history + [gray_to_rgb(diffmap), gray_to_rgb(gt * 255).to(torch.uint8)]))
 
 
 if __name__ == '__main__':
