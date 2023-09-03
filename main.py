@@ -168,7 +168,8 @@ def main(args: TrainArgs):
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
+    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "train_arg_config")
+    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
 
     for epoch in range(args.epochs):
         model.train()
@@ -180,7 +181,7 @@ def main(args: TrainArgs):
         running_loss_train = 0
 
         for btc_num, (batch, label) in enumerate(train_loader):
-            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps)
+            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, 'perlin')
 
             running_loss_train += loss
             progress_bar.update(1)

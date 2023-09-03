@@ -19,6 +19,7 @@ import torch
 from diffusers.utils import randn_tensor, numpy_to_pil
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from utils.pipeline_utils import DBADPipelineOutput
+from noise.noise import perlin_2d_batch
 
 
 class DDIMReconstructionPipeline(DiffusionPipeline):
@@ -125,6 +126,7 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
             )
 
         noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
+        noise = perlin_2d_batch(image_shape, (8, 8)).to(self._execution_device)
         starting_step = torch.ones((image_shape[0],), dtype=torch.int64, device=self.device) * start_at_timestep
         image = self.scheduler.add_noise(original_images, noise, starting_step)
 
