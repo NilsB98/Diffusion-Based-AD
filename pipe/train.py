@@ -1,5 +1,4 @@
 import torch
-from noise.noise import perlin_2d_batch
 from noise.perlin import simplexGenerator
 
 

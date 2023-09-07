@@ -21,7 +21,6 @@ from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 from noise.perlin import simplexGenerator
 from utils.pipeline_utils import DBADPipelineOutput
-from noise.noise import perlin_2d_batch
 
 
 class DDIMReconstructionPipeline(DiffusionPipeline):
