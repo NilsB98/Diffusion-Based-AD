@@ -18,6 +18,8 @@ import torch
 
 from diffusers.utils import randn_tensor, numpy_to_pil
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+
+from noise.perlin import simplexGenerator
 from utils.pipeline_utils import DBADPipelineOutput
 from noise.noise import perlin_2d_batch
 
@@ -125,8 +127,9 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
-        noise = perlin_2d_batch(image_shape, (8, 8)).to(self._execution_device)
+        # noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
+        # noise = perlin_2d_batch(image_shape, (8, 8)).to(self._execution_device)
+        noise = simplexGenerator.batch_3d_octaves(image_shape, 6, 0.6).to(self._execution_device)
         starting_step = torch.ones((image_shape[0],), dtype=torch.int64, device=self.device) * start_at_timestep
         image = self.scheduler.add_noise(original_images, noise, starting_step)
 
@@ -152,12 +155,17 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
         if not return_dict:
             return image_cp, history
 
-        return DBADPipelineOutput(images=image_cp, history=history)
+        return DBADPipelineOutput(images=post_process_img(image, np_ordering=False), history=history)
 
 
-def post_process_img(image, output_type):
+def post_process_img(image, output_type="numpy", np_ordering=True):
     image_cp = (image / 2 + 0.5).clamp(0, 1)
-    image_cp = image_cp.cpu().permute(0, 2, 3, 1).numpy()
+
+    if np_ordering:
+        image_cp = image_cp.permute(0, 2, 3, 1)
+
+    if output_type== "numpy":
+        image_cp = image_cp.cpu().numpy()
 
     if output_type == "pil":
         image_cp = numpy_to_pil(image_cp)

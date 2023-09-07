@@ -26,7 +26,8 @@ def rand_perlin_2d(shape: tuple, res: tuple, fade=lambda t: 6 * t ** 5 - 15 * t 
 
 
 def perlin_2d_batch(shape: tuple, res: tuple, fade=lambda t: 6 * t ** 5 - 15 * t ** 4 + 10 * t ** 3):
-    img_noise = lambda: rand_perlin_2d(shape[-2:], res, fade).unsqueeze(0).repeat(3, 1, 1)
+    # TODO try random noise in all channels instead of repeat
+    img_noise = lambda: rand_perlin_2d_octaves(shape[-2:], res, octaves=5).unsqueeze(0).repeat(3, 1, 1)
     return torch.stack([img_noise() for _ in range(shape[0])])
 
 
@@ -51,7 +52,8 @@ if __name__ == '__main__':
     plt.savefig('perlin.png')
     plt.close()
 
-    noise = rand_perlin_2d_octaves((256, 256), (8, 8), 5)
+    batch_noise = perlin_2d_batch((8, 3, 128, 128), (8, 8))
+    noise = rand_perlin_2d_octaves((128, 128), (8, 8), 5)
     plt.figure()
     plt.imshow(noise, cmap='gray', interpolation='lanczos')
     plt.colorbar()

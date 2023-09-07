@@ -1,11 +1,12 @@
 # https://github.com/lmas/opensimplex fork
-
+# from perlin noise diffusion repo
 
 from ctypes import c_int64
 from math import floor
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib import animation
 from numba import njit, prange
 
@@ -16,7 +17,7 @@ class Simplex_CLASS:
     def __init__(self):
         self.newSeed()
 
-    def newSeed(self, seed=None):
+    def newSeed(self, seed:int=None):
         if not seed:
             seed = np.random.randint(-100000000, 100000000)
         self._perm, self._perm_grad_index3 = _init(seed)
@@ -52,6 +53,23 @@ class Simplex_CLASS:
             frequency /= 2
             amplitude *= persistence
         return noise
+
+    def batch_3d_octaves(self, shape, octaves=1, persistence=0.5, frequency=32, seed:int=None):
+        """
+            Returns a batch of layered fractal noise in 3D
+        :param shape: Shape of 4D tensor output. First dimension being number of batches.
+        :param octaves: Number of levels of fractal noise
+        :param persistence: float between (0-1) -> Rate at which amplitude of each level decreases
+        :param frequency: Frequency of initial octave of noise
+        :param seed: seed for the generated noise
+        :return: Fractal noise sample with n lots of 2D images
+        """
+        # assume shape of (batch, channel, height, width)
+        assert len(shape) == 4
+        self.newSeed(seed)
+        noise = np.stack([self.rand_3d_octaves(shape[1:], octaves, persistence, frequency) for _ in range(shape[0])], axis=0)
+        return torch.tensor(noise, dtype=torch.float32)
+
 
     def rand_2d_octaves(self, shape, octaves=1, persistence=0.5, frequency=32):
         """
@@ -858,7 +876,7 @@ def _noise3aSlow(X, Y, T, FEATURE_SIZE, perm, perm_grad_index3):
                 img[t, x, y] = _noise3(x / FEATURE_SIZE, y / FEATURE_SIZE, t / FEATURE_SIZE, perm, perm_grad_index3)
     return img
 
-
+simplexGenerator = Simplex_CLASS()
 
 def testing_main():
     times = []
@@ -908,13 +926,12 @@ def testing_main():
     three_noise = simplexObj.rand_3d_octaves((slices, *img_size), 6, 0.6)
 
     print(three_noise.shape)
-    fig, ax = plt.subplots()
-    imgs = [[ax.imshow(three_noise[x], animated=True, cmap='gray')] for x in range(slices)]
-    ani = animation.ArtistAnimation(
-            fig, imgs, interval=50, blit=True,
-            repeat_delay=1000
-            )
-    ani.save(f'SIMPLEX_TEST_Oct.mp4')
+    fig, ax = plt.subplots(3)
+    ax[0].imshow(three_noise[0], cmap='gray')
+    ax[1].imshow(three_noise[1], cmap='gray')
+    ax[2].imshow(three_noise[99], cmap='gray')
+
+    plt.show()
 
     # t = np.arange(0, slices) / feature_size
     # x = np.arange(0, img_size[0]) / feature_size  # indices divided by feature size

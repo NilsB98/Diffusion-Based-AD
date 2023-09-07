@@ -12,7 +12,8 @@ from torchvision import transforms
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
+from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
+    split_into_patches
 
 
 @dataclass
@@ -87,9 +88,10 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
     augmentations = transforms.Compose(
         [
-            transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR),
+            # transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
+            # transforms.CenterCrop(model_config["sample_size"]),
             transforms.Normalize([0.5], [0.5]),
         ]
     )
@@ -116,7 +118,8 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
         for i, (img, state, gt) in enumerate(test_loader):
-            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
+            patches = split_into_patches(img[1], model_config["sample_size"])
+            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, patches,
                                                                                 args.eta, args.num_inference_steps,
                                                                                 args.start_at_timestep)
             plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],

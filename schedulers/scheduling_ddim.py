@@ -26,6 +26,8 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils import BaseOutput, randn_tensor
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin
 
+# from noise.noise import perlin_2d_batch
+from noise.perlin import simplexGenerator
 
 @dataclass
 # Copied from diffusers.schedulers.scheduling_ddpm.DDPMSchedulerOutput with DDPM->DDIM
@@ -478,6 +480,7 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
                 variance_noise = randn_tensor(
                     model_output.shape, generator=generator, device=model_output.device, dtype=model_output.dtype
                 )
+                variance_noise = simplexGenerator.batch_3d_octaves(model_output.shape, 6, 0.6).to(model_output.device)# perlin_2d_batch(model_output.shape, (8, 8)).to(model_output.device)
             variance = std_dev_t * variance_noise
 
             prev_sample = prev_sample + variance

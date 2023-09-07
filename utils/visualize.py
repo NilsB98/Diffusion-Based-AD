@@ -71,10 +71,11 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
 
     images_processed = (reconstruction * 255).round().astype("int")
     reconstruction = torch.from_numpy(images_processed)
-    reconstruction = torch.permute(reconstruction, (0, 3, 1, 2))
+    reconstruction = stitch_patches(reconstruction)
+    # reconstruction = torch.permute(reconstruction, (0, 2, 3, 1))
 
-    original_image = transforms.Normalize([-0.5 * 2], [2])(original_image)
-    original = (original_image * 255).round().type(torch.int32)
+    original = unnormalize_original_img(original_image)
+    original = stitch_patches(original)
 
     diff_map = (original - reconstruction) ** 2
     diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
@@ -134,9 +135,56 @@ def show(imgs, title):
 def output_to_img(output):
     img = (output * 255).round().astype("int")
     img = torch.from_numpy(img)
+    img = stitch_patches(img)
     img = torch.permute(img, (0, 3, 1, 2)).to(torch.uint8)
     return img
 
 
+def unnormalize_original_img(original_image):
+    original_image = transforms.Normalize([-0.5 * 2], [2])(original_image)
+    original = (original_image * 255).round().type(torch.int32)
+    return original
+
+
 def gray_to_rgb(image: torch.Tensor):
     return image.repeat((1, 3, 1, 1))
+
+def split_into_patches(image: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """
+    Takes a single image and splits it into a batch of patches.
+    I.e. a new dimension is added.
+
+    :param image:  Image to split
+    :param patch_size: Size which the image patches should have (rectangular)
+    :return: batch of image patches => shape: (B, CH, patch_size, patch_size)
+    """
+
+    ps = patch_size
+    assert len(image.shape) == 3, f"Image is expected to have shape (CH,H,W). Given: {image.shape}"
+    assert image.shape[-1] % ps == 0, f"image of shape {image.shape} cannot be split into patches with patch size {ps}"
+
+    # differentiate between rgb and grayscale images:
+    n_ch = image.shape[0]
+    patches = image.data.unfold(0, n_ch, n_ch).unfold(1, ps, ps).unfold(2, ps, ps).reshape(-1, n_ch, ps, ps)
+
+    return patches
+
+def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
+    """
+    Stitch patches of images back together. (Inverse operation to @split_into_patches)
+
+    :param patches: either a 2D or 1D batch of image patches. Assume 1D for img_patches of 4 dims and 2D for 5 dims.
+    :return: stitched image tensor with batch size of 1 (1, 3, H, W).
+    """
+
+    # convert to 2D if its in 1D batch
+    if len(patches.shape) == 4:
+        dim = int(patches.shape[0] ** 0.5)
+        patches = torch.reshape(patches, (dim, dim, *patches.shape[1:]))
+
+    rows = [torch.cat(patches[i].unbind(), dim=2) for i in range(len(patches))]
+
+    # Now, concatenate the rows along the vertical axis (axis 2)
+    stitched = torch.cat(rows, dim=1)
+
+    return stitched.unsqueeze(0)
