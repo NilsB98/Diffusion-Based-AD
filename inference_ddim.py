@@ -35,7 +35,7 @@ class InferenceArgs:
     shuffle: bool
     img_dir: str
     plt_imgs: bool
-
+    patch_imgs: bool
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -90,7 +90,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
     augmentations = transforms.Compose(
         [
-            transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR) ,
+            # transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(lambda x: x),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             # transforms.CenterCrop(model_config["sample_size"]),
