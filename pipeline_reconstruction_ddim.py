@@ -19,7 +19,7 @@ import torch
 from diffusers.utils import randn_tensor, numpy_to_pil
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
-from noise.perlin import simplexGenerator
+from noise.simplex import simplexGenerator
 from utils.pipeline_utils import DBADPipelineOutput
 
 

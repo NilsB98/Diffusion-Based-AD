@@ -27,7 +27,7 @@ from diffusers.utils import BaseOutput, randn_tensor
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin
 
 # from noise.noise import perlin_2d_batch
-from noise.perlin import simplexGenerator
+from noise.simplex import simplexGenerator
 
 @dataclass
 # Copied from diffusers.schedulers.scheduling_ddpm.DDPMSchedulerOutput with DDPM->DDIM

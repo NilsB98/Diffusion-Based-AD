@@ -25,7 +25,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils import BaseOutput, randn_tensor
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin
 
-from noise.perlin import simplexGenerator
+from noise.simplex import simplexGenerator
 
 
 @dataclass

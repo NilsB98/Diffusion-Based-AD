@@ -1,6 +1,6 @@
 import torch
 
-from noise.perlin import simplexGenerator
+from noise.simplex import simplexGenerator
 
 
 def validate_step(model, batch, noise_scheduler, num_train_steps, loss_fn):

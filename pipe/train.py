@@ -1,5 +1,5 @@
 import torch
-from noise.perlin import simplexGenerator
+from noise.simplex import simplexGenerator
 
 
 def train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, num_train_steps, noise_kind='normal'):

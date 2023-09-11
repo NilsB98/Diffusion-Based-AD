@@ -75,6 +75,8 @@ def parse_args() -> InferenceArgs:
                         help='Shuffle the items in the dataset')
     parser.add_argument('--plt_imgs', action='store_true',
                         help='Plot the images with matplot lib. I.e. call plt.show()')
+    parser.add_argument('--patch_imgs', action='store_true',
+                        help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -88,7 +90,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
     augmentations = transforms.Compose(
         [
-            # transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR) ,
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             # transforms.CenterCrop(model_config["sample_size"]),
@@ -118,7 +120,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
         for i, (img, state, gt) in enumerate(test_loader):
-            patches = split_into_patches(img[1], model_config["sample_size"])
+            patches = split_into_patches(img[0], model_config["sample_size"])
             original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, patches,
                                                                                 args.eta, args.num_inference_steps,
                                                                                 args.start_at_timestep)
