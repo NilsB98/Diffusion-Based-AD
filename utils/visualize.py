@@ -27,7 +27,7 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
 
     images_processed = (images * 255).round().astype("int")
     images = torch.from_numpy(images_processed)
-    images = torch.permute(images, (0, 3, 1, 2))
+    # images = torch.permute(images, (0, 3, 1, 2))
 
     original_images = transforms.Normalize([-0.5 * 2], [2])(original_images)
     originals = (original_images * 255).round().type(torch.int32)
@@ -49,10 +49,14 @@ def generate_samples(model, noise_scheduler, plt_title, original_images, eta, st
     return grid_generated_imgs, grid_mask
 
 
-def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to_regenerate, start_at_timestep):
+def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to_regenerate, start_at_timestep, patch_imgs=False, noise_kind='gaussian'):
+    if patch_imgs:
+        original_image = split_into_patches(original_image[0], model.sample_size)
+
     pipeline = DDIMReconstructionPipeline(
         unet=model,
         scheduler=noise_scheduler,
+        noise_kind=noise_kind
     )
 
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
@@ -71,11 +75,12 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
 
     images_processed = (reconstruction * 255).round().astype("int")
     reconstruction = torch.from_numpy(images_processed)
-    reconstruction = stitch_patches(reconstruction)
-    # reconstruction = torch.permute(reconstruction, (0, 2, 3, 1))
 
     original = unnormalize_original_img(original_image)
-    original = stitch_patches(original)
+
+    if patch_imgs:
+        reconstruction = stitch_patches(reconstruction)
+        original = stitch_patches(original)
 
     diff_map = (original - reconstruction) ** 2
     diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
@@ -136,7 +141,7 @@ def output_to_img(output):
     img = (output * 255).round().astype("int")
     img = torch.from_numpy(img)
     img = stitch_patches(img)
-    img = torch.permute(img, (0, 3, 1, 2)).to(torch.uint8)
+    img = img.to(torch.uint8)
     return img
 
 

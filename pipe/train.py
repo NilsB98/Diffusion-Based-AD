@@ -2,17 +2,16 @@ import torch
 from noise.simplex import simplexGenerator
 
 
-def train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, num_train_steps, noise_kind='normal'):
-    assert noise_kind in ['normal', 'perlin']
+def train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, num_train_steps, noise_kind='gaussian'):
+    assert noise_kind in ['gaussian', 'simplex']
 
     model.train()
     clean_imgs = batch.to(model.device)
 
     noise = None
-    if noise_kind == 'normal':
+    if noise_kind == 'gaussian':
         noise = torch.randn(clean_imgs.shape, dtype=clean_imgs.dtype)
-    elif noise_kind == 'perlin':
-        # noise = perlin_2d_batch(clean_imgs.shape, (8, 8))
+    elif noise_kind == 'simplex':
         noise = simplexGenerator.batch_3d_octaves(clean_imgs.shape, 6, 0.6)
     noise = noise.to(clean_imgs.device)
 

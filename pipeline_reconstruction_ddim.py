@@ -38,9 +38,10 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
             [`DDPMScheduler`], or [`DDIMScheduler`].
     """
 
-    def __init__(self, unet, scheduler):
+    def __init__(self, unet, scheduler, noise_kind='gaussian'):
         super().__init__()
 
+        self.noise_kind = noise_kind
         self.register_modules(unet=unet, scheduler=scheduler)
 
     @torch.no_grad()
@@ -126,9 +127,12 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        # noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
-        # noise = perlin_2d_batch(image_shape, (8, 8)).to(self._execution_device)
-        noise = simplexGenerator.batch_3d_octaves(image_shape, 6, 0.6).to(self._execution_device)
+        if self.noise_kind == 'gaussian':
+            noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
+        elif self.noise_kind == 'simplex':
+            noise = simplexGenerator.batch_3d_octaves(image_shape, 6, 0.6).to(self._execution_device)
+        else:
+            raise ValueError(f"Unknown noise kind '{self.noise_kind}', please use either 'gaussian' or 'simplex'")
         starting_step = torch.ones((image_shape[0],), dtype=torch.int64, device=self.device) * start_at_timestep
         image = self.scheduler.add_noise(original_images, noise, starting_step)
 
@@ -148,7 +152,7 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 generator=generator
             ).prev_sample
 
-            image_cp = post_process_img(image, output_type)
+            image_cp = post_process_img(image, output_type, np_ordering=False)
             history.append(image_cp)
 
         if not return_dict:

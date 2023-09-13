@@ -86,14 +86,15 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     print("**** starting inference *****")
     config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
     model_config = json.loads(config_file.read())
+    train_arg_file = open(f"{args.checkpoint_dir}/train_arg_config.json", "r")
+    train_arg_config:dict = json.loads(train_arg_file.read())
     save_args(args, args.img_dir, "inference_args")
 
     augmentations = transforms.Compose(
         [
-            # transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(lambda x: x),
+            transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(lambda x: x),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
-            # transforms.CenterCrop(model_config["sample_size"]),
             transforms.Normalize([0.5], [0.5]),
         ]
     )
@@ -119,12 +120,13 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         # validate and generate images
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
+        noise_kind = train_arg_config.get("noise_kind", "gaussian")
         for i, (img, state, gt) in enumerate(test_loader):
-            patches = split_into_patches(img[0], model_config["sample_size"])
-            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, patches,
+            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
                                                                                 args.eta, args.num_inference_steps,
-                                                                                args.start_at_timestep)
-            plot_single_channel_imgs([gt, diffmap], ["ground truth", "heatmap"],
+                                                                                args.start_at_timestep, args.patch_imgs,
+                                                                                noise_kind)
+            plot_single_channel_imgs([gt, diffmap], ["ground truth", "diff-map"],
                                      save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png", show_img=args.plt_imgs)
             plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
                           save_to=f"{args.img_dir}/{i}_{state[0]}.png", show_img=args.plt_imgs)

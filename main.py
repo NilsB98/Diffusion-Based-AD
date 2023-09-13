@@ -40,6 +40,8 @@ class TrainArgs:
     reconstruction_weight: float
     eta: float
     batch_size: int
+    noise_kind: str
+    crop: bool
 
 
 def parse_args() -> TrainArgs:
@@ -80,6 +82,11 @@ def parse_args() -> TrainArgs:
                         help='Stochasticity parameter of DDIM, with eta=1 being DDPM and eta=0 meaning no randomness. Only used during inference, not training.')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size during training')
+    parser.add_argument('--noise_kind', type=str, default="gaussian",
+                        choices=["simplex", "gaussian"],
+                        help='Kind of noise to use for the noising steps.')
+    parser.add_argument('--crop', action='store_true',
+                        help='If set: the image will be cropped to the resolution instead of resized.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -87,9 +94,8 @@ def parse_args() -> TrainArgs:
 def transform_imgs_test(imgs):
     augmentations = transforms.Compose(
         [
-            # transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
-            transforms.CenterCrop(args.resolution),
             transforms.Normalize([0.5], [0.5]),
         ]
     )
@@ -100,12 +106,11 @@ def transform_imgs_test(imgs):
 def transform_imgs_train(imgs):
     augmentations = transforms.Compose(
         [
-            # transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.RandomRotation(args.rotate),
             transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
             transforms.ToTensor(),
-            transforms.CenterCrop(args.resolution),
             transforms.Normalize([0.5], [0.5]),
         ]
     )
@@ -123,28 +128,23 @@ def main(args: TrainArgs):
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
+    channel_multiplier = {
+        128: (128, 128, 256, 384, 512),
+        256: (128, 128, 256, 256, 512, 512)
+    }
+    down_blocks = ["DownBlock2D" for _ in channel_multiplier[args.resolution]]
+    down_blocks[-2] = "AttnDownBlock2D"
+    up_blocks = ["UpBlock2D" for _ in channel_multiplier[args.resolution]]
+    up_blocks[1] = "AttnUpBlock2D"
+
     model_args = {
         "sample_size": args.resolution,
         "in_channels": 3,
         "out_channels": 3,
         "layers_per_block": 2,
-        "block_out_channels": (128, 128, 256, 256, 512, 512),
-        "down_block_types": (
-            "DownBlock2D",
-            "DownBlock2D",
-            "DownBlock2D",
-            "DownBlock2D",
-            "AttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        "up_block_types": (
-            "UpBlock2D",
-            "AttnUpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-        )
+        "block_out_channels": channel_multiplier[args.resolution],
+        "down_block_types": down_blocks,
+        "up_block_types": up_blocks
     }
     model = UNet2DModel(
         **model_args
@@ -188,7 +188,7 @@ def main(args: TrainArgs):
         running_loss_train = 0
 
         for btc_num, (batch, label) in enumerate(train_loader):
-            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, 'perlin')
+            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
 
             running_loss_train += loss
             progress_bar.update(1)
