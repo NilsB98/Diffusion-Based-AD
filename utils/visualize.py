@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from torchvision import transforms
 from torchvision.utils import make_grid
 import torchvision.transforms.functional as F
+from PIL import Image
 
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
@@ -73,8 +74,8 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
     reconstruction = pipe_output.images
     history = pipe_output.history
 
-    images_processed = (reconstruction * 255).round().astype("int")
-    reconstruction = torch.from_numpy(images_processed)
+    # images_processed = (reconstruction * 255).round().astype("int")
+    reconstruction = torch.from_numpy(reconstruction)
 
     original = unnormalize_original_img(original_image)
 
@@ -82,21 +83,24 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
         reconstruction = stitch_patches(reconstruction)
         original = stitch_patches(original)
 
-    diff_map = (original - reconstruction) ** 2
+    # TODO try using (diff_map > 0.5).float() directly as the anomaly map => i.e. no diffmap to plot
+    diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
     diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
-    diff_map = (diff_map * 255).round()
-    diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
-
-    history = [output_to_img(output) for output in history]
+    # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
+    diff_map = torch.amax(diff_map, (1))[:, None, :, :]
+    history["images"] = [output_to_img(output) for output in history["images"]]
 
     return original, reconstruction, diff_map, history
 
 
-def plot_single_channel_imgs(imgs, titles, save_to=None, show_img=False):
+def plot_single_channel_imgs(imgs, titles, cmaps=None, save_to=None, show_img=False):
+    if cmaps is None:
+        cmaps = ['viridis' for _ in imgs]
+
     fig, axs = plt.subplots(nrows=1, ncols=len(imgs))
     fig.set_figwidth(15)
-    for i, (img, title) in enumerate(zip(imgs, titles)):
-        aximg = axs[i].imshow(img.squeeze(), cmap='viridis')
+    for i, (img, title, cmap) in enumerate(zip(imgs, titles, cmaps)):
+        aximg = axs[i].imshow(img.squeeze(), cmap=cmap)
         axs[i].set_title(title)
         axs[i].tick_params(which="both", bottom=False, left=False, labelbottom=False, labelleft=False)
         fig.colorbar(aximg, ax=axs[i], shrink=1)
@@ -138,17 +142,16 @@ def show(imgs, title):
 
 
 def output_to_img(output):
-    img = (output * 255).round().astype("int")
-    img = torch.from_numpy(img)
+    # img = (output * 255).round().astype("int")
+    img = torch.from_numpy(output)
     img = stitch_patches(img)
-    img = img.to(torch.uint8)
     return img
 
 
 def unnormalize_original_img(original_image):
     original_image = transforms.Normalize([-0.5 * 2], [2])(original_image)
-    original = (original_image * 255).round().type(torch.int32)
-    return original
+    # original = (original_image * 255).round().type(torch.int32)
+    return original_image
 
 
 def gray_to_rgb(image: torch.Tensor):
@@ -193,3 +196,32 @@ def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
     stitched = torch.cat(rows, dim=1)
 
     return stitched.unsqueeze(0)
+
+def add_overlay(img: torch.Tensor, overlay: torch.Tensor) -> torch.Tensor:
+    """
+    Add a heatmap-like overlay to an image to make anomalous regions more visible.
+
+    :param img: original rgb-image
+    :param overlay: single-channel overlay or anomaly map
+    :return: tensor with blend of image and overlay
+    """
+
+    assert len(overlay.shape) == len(img.shape), "overlay and img must have the same number of dimensions"
+    if len(img.shape) == 3:
+        img = img.unsqueeze(0)
+        overlay = overlay.unsqueeze(0)
+
+    to_tensor = F.pil_to_tensor if img.max() > 1 else F.to_tensor
+
+    heatmap = torch.zeros_like(overlay)
+    heatmap = torch.cat((overlay, heatmap, heatmap), dim=1)
+
+    img_list = torch.unbind(img)
+    pil_imgs = [F.to_pil_image(img) for img in img_list]
+
+    heatmap_list = torch.unbind(heatmap)
+    pil_heatmaps = [F.to_pil_image(heatmap.to(torch.float)) for heatmap in heatmap_list]
+
+    pil_blends = [Image.blend(pil_img, pil_hm, 0.5) for (pil_img, pil_hm) in zip(pil_imgs, pil_heatmaps)]
+    blends = torch.cat([to_tensor(blend) for blend in pil_blends])
+    return blends

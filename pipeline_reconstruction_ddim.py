@@ -138,7 +138,7 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps, start_at_timestep)
-        history = []
+        history = {'images': [], 'timesteps': []}
 
         for t in self.progress_bar(self.scheduler.timesteps):
             # 1. predict noise model_output
@@ -153,8 +153,11 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
             ).prev_sample
 
             image_cp = post_process_img(image, output_type, np_ordering=False)
-            history.append(image_cp)
+            history["images"].append(image_cp)
+            history["timesteps"].append(t)
 
+        history["images"].reverse()
+        history["timesteps"].reverse()
         if not return_dict:
             return image_cp, history
 
