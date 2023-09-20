@@ -13,7 +13,10 @@ import utils.anomalies
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
+from utils.metrics import scores
+from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
+    split_into_patches, add_overlay
+from collections import Counter
 
 
 @dataclass
@@ -35,6 +38,8 @@ class InferenceArgs:
     shuffle: bool
     img_dir: str
     plt_imgs: bool
+    patch_imgs: bool
+    run_id: str
 
 
 def parse_args() -> InferenceArgs:
@@ -65,6 +70,8 @@ def parse_args() -> InferenceArgs:
                         help='Type of schedule for the beta/variance values')
     parser.add_argument('--dataset_path', type=str, required=True,
                         help='directory path to the (mvtec) dataset')
+    parser.add_argument('--run_id', type=str, default='inference',
+                        help='id of the run, required for the logging')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
     parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
@@ -75,6 +82,8 @@ def parse_args() -> InferenceArgs:
                         help='Shuffle the items in the dataset')
     parser.add_argument('--plt_imgs', action='store_true',
                         help='Plot the images with matplot lib. I.e. call plt.show()')
+    parser.add_argument('--patch_imgs', action='store_true',
+                        help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -84,11 +93,15 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     print("**** starting inference *****")
     config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
     model_config = json.loads(config_file.read())
+    train_arg_file = open(f"{args.checkpoint_dir}/train_arg_config.json", "r")
+    train_arg_config: dict = json.loads(train_arg_file.read())
     save_args(args, args.img_dir, "inference_args")
 
     augmentations = transforms.Compose(
         [
-            transforms.Resize(model_config["sample_size"], interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.Resize(model_config["sample_size"],
+                              interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(
+                lambda x: x),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
@@ -114,23 +127,47 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
     with torch.no_grad():
         # validate and generate images
-        noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep, beta_schedule=args.beta_schedule, timestep_spacing="leading",
+        noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep,
+                                                  beta_schedule=args.beta_schedule, timestep_spacing="leading",
                                                   reconstruction_weight=args.reconstruction_weight)
+        noise_kind = train_arg_config.get("noise_kind", "gaussian")
+        eval_scores = Counter()
+
         for i, (img, state, gt) in enumerate(test_loader):
             original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
                                                                                 args.eta, args.num_inference_steps,
-                                                                                args.start_at_timestep)
-            anomaly_map = utils.anomalies.diff_map_to_anomaly_map(diffmap, 100)
-            plot_single_channel_imgs([gt, diffmap, anomaly_map], ["ground truth", "heatmap", "anomaly-map"],
+                                                                                args.start_at_timestep, args.patch_imgs,
+                                                                                noise_kind)
+
+            anomaly_map = utils.anomalies.diff_map_to_anomaly_map(diffmap, .3)
+            overlay = add_overlay(original, anomaly_map)
+            eval_scores.update(scores(gt, anomaly_map))
+
+            plot_single_channel_imgs([gt, diffmap, anomaly_map], ["ground truth", "diff-map", "anomaly-map"],
+                                     cmaps=['gray', 'viridis', 'gray'],
                                      save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png", show_img=args.plt_imgs)
-            plot_rgb_imgs([original, reconstruction], ["original", "reconstructed"],
+            plot_rgb_imgs([original, reconstruction, overlay], ["original", "reconstructed", "overlay"],
                           save_to=f"{args.img_dir}/{i}_{state[0]}.png", show_img=args.plt_imgs)
 
             if writer is not None:
-                writer.add_images(f"{i}_{state[0]}", torch.concat([original.to(torch.uint8)] + history + [gray_to_rgb(diffmap), gray_to_rgb(gt * 255).to(torch.uint8)]))
+                for t, im in zip(history["timesteps"], history["images"]):
+                    writer.add_images(f"{i}_{state[0]}_process", im, t)
+                writer.add_images(f"{i}_{state[0]}_results (ori, rec, diff, pred, gt)", torch.concat([original, reconstruction, gray_to_rgb(diffmap), gray_to_rgb(anomaly_map),
+                                                            gray_to_rgb(gt)]))
+
+        for key in eval_scores:
+            eval_scores[key] /= len(test_loader)
+        writer.add_hparams({'category': args.mvtec_item, 'eta': args.eta,
+                            'recon_weight': args.reconstruction_weight, 'states': ','.join(args.mvtec_item_states),
+                            't': args.start_at_timestep, 'num_steps': args.num_inference_steps,
+                            'input_size': model_config["sample_size"], 'patching': args.patch_imgs}, dict(eval_scores),
+                           run_name=f'hp')
+        print(eval_scores)
 
 
 if __name__ == '__main__':
     args: InferenceArgs = parse_args()
-    writer = SummaryWriter(f'{args.log_dir}/inference')
+    writer = SummaryWriter(f'{args.log_dir}/{args.run_id}')
     main(args, writer)
+    writer.flush()
+    writer.close()

@@ -18,6 +18,8 @@ import torch
 
 from diffusers.utils import randn_tensor, numpy_to_pil
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+
+from noise.simplex import simplexGenerator
 from utils.pipeline_utils import DBADPipelineOutput
 
 
@@ -36,9 +38,10 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
             [`DDPMScheduler`], or [`DDIMScheduler`].
     """
 
-    def __init__(self, unet, scheduler):
+    def __init__(self, unet, scheduler, noise_kind='gaussian'):
         super().__init__()
 
+        self.noise_kind = noise_kind
         self.register_modules(unet=unet, scheduler=scheduler)
 
     @torch.no_grad()
@@ -124,13 +127,18 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
+        if self.noise_kind == 'gaussian':
+            noise = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
+        elif self.noise_kind == 'simplex':
+            noise = simplexGenerator.batch_3d_octaves(image_shape, 6, 0.6).to(self._execution_device)
+        else:
+            raise ValueError(f"Unknown noise kind '{self.noise_kind}', please use either 'gaussian' or 'simplex'")
         starting_step = torch.ones((image_shape[0],), dtype=torch.int64, device=self.device) * start_at_timestep
         image = self.scheduler.add_noise(original_images, noise, starting_step)
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps, start_at_timestep)
-        history = []
+        history = {'images': [], 'timesteps': []}
 
         for t in self.progress_bar(self.scheduler.timesteps):
             # 1. predict noise model_output
@@ -144,18 +152,26 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
                 generator=generator
             ).prev_sample
 
-            image_cp = post_process_img(image, output_type)
-            history.append(image_cp)
+            image_cp = post_process_img(image, output_type, np_ordering=False)
+            history["images"].append(image_cp)
+            history["timesteps"].append(t)
 
+        history["images"].reverse()
+        history["timesteps"].reverse()
         if not return_dict:
             return image_cp, history
 
-        return DBADPipelineOutput(images=image_cp, history=history)
+        return DBADPipelineOutput(images=post_process_img(image, np_ordering=False), history=history)
 
 
-def post_process_img(image, output_type):
+def post_process_img(image, output_type="numpy", np_ordering=True):
     image_cp = (image / 2 + 0.5).clamp(0, 1)
-    image_cp = image_cp.cpu().permute(0, 2, 3, 1).numpy()
+
+    if np_ordering:
+        image_cp = image_cp.permute(0, 2, 3, 1)
+
+    if output_type== "numpy":
+        image_cp = image_cp.cpu().numpy()
 
     if output_type == "pil":
         image_cp = numpy_to_pil(image_cp)

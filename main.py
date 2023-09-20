@@ -18,6 +18,7 @@ from utils.files import save_args
 from utils.visualize import generate_samples
 from dataclasses import dataclass
 from schedulers.scheduling_ddim import DDIMScheduler
+from schedulers.scheduling_ddpm import DBADScheduler
 
 
 @dataclass
@@ -39,6 +40,8 @@ class TrainArgs:
     reconstruction_weight: float
     eta: float
     batch_size: int
+    noise_kind: str
+    crop: bool
 
 
 def parse_args() -> TrainArgs:
@@ -79,6 +82,11 @@ def parse_args() -> TrainArgs:
                         help='Stochasticity parameter of DDIM, with eta=1 being DDPM and eta=0 meaning no randomness. Only used during inference, not training.')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size during training')
+    parser.add_argument('--noise_kind', type=str, default="gaussian",
+                        choices=["simplex", "gaussian"],
+                        help='Kind of noise to use for the noising steps.')
+    parser.add_argument('--crop', action='store_true',
+                        help='If set: the image will be cropped to the resolution instead of resized.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -86,7 +94,7 @@ def parse_args() -> TrainArgs:
 def transform_imgs_test(imgs):
     augmentations = transforms.Compose(
         [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -115,37 +123,35 @@ def main(args: TrainArgs):
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
                               transform_imgs_train)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
-    test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["good"],
+    test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
                              transform_imgs_test)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
+    channel_multiplier = {
+        128: (128, 128, 256, 384, 512),
+        256: (128, 128, 256, 256, 512, 512)
+    }
+    down_blocks = ["DownBlock2D" for _ in channel_multiplier[args.resolution]]
+    down_blocks[-2] = "AttnDownBlock2D"
+    up_blocks = ["UpBlock2D" for _ in channel_multiplier[args.resolution]]
+    up_blocks[1] = "AttnUpBlock2D"
+
     model_args = {
         "sample_size": args.resolution,
         "in_channels": 3,
         "out_channels": 3,
         "layers_per_block": 2,
-        "block_out_channels": (128, 128, 256, 384, 512),
-        "down_block_types": (
-            "DownBlock2D",
-            "DownBlock2D",
-            "DownBlock2D",
-            "AttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        "up_block_types": (
-            "UpBlock2D",
-            "AttnUpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-        )
+        "block_out_channels": channel_multiplier[args.resolution],
+        "down_block_types": down_blocks,
+        "up_block_types": up_blocks
     }
     model = UNet2DModel(
         **model_args
     )
 
     noise_scheduler = DDPMScheduler(args.train_steps, beta_schedule=args.beta_schedule)
+    # noise_scheduler = DBADScheduler(args.train_steps, beta_schedule=args.beta_schedule)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         weight_decay=1e-6,
@@ -168,7 +174,9 @@ def main(args: TrainArgs):
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
+    print(f"run_id: {args.run_name}_{timestamp}")
+    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "train_arg_config")
+    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
 
     for epoch in range(args.epochs):
         model.train()
@@ -180,7 +188,7 @@ def main(args: TrainArgs):
         running_loss_train = 0
 
         for btc_num, (batch, label) in enumerate(train_loader):
-            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps)
+            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
 
             running_loss_train += loss
             progress_bar.update(1)
@@ -209,7 +217,7 @@ def main(args: TrainArgs):
                                                         next(iter(test_loader))[0], args.eta, steps_to_regenerate=20,
                                                         start_at_timestep=200)
 
-                writer.add_image(f'Test samples {epoch=}', test_grid, epoch)
+                writer.add_image(f'Test samples', test_grid, epoch)
 
             if epoch % args.save_n_epochs == 0 and epoch > 0:
                 torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{epoch}.pt")

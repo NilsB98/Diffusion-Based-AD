@@ -25,6 +25,8 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils import BaseOutput, randn_tensor
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin
 
+from noise.simplex import simplexGenerator
+
 
 @dataclass
 class DBADSchedulerOutput(BaseOutput):
@@ -444,6 +446,7 @@ class DBADScheduler(SchedulerMixin, ConfigMixin):
             variance_noise = randn_tensor(
                 model_output.shape, generator=generator, device=device, dtype=model_output.dtype
             )
+            variance_noise = simplexGenerator.batch_3d_octaves(model_output.shape, 6, 0.6).to(device)
             if self.variance_type == "fixed_small_log":
                 variance = self._get_variance(t, predicted_variance=predicted_variance) * variance_noise
             elif self.variance_type == "learned_range":
