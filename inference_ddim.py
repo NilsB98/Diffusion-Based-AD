@@ -1,6 +1,7 @@
 # imports
 import argparse
 import json
+import os
 from dataclasses import dataclass
 
 import torch
@@ -13,9 +14,9 @@ import utils.anomalies
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.metrics import scores
-from utils.visualize import generate_single_sample, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
-    split_into_patches, add_overlay
+from utils.metrics import scores, scores_batch
+from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
+    split_into_patches, add_overlay, add_batch_overlay
 from collections import Counter
 
 
@@ -31,7 +32,6 @@ class InferenceArgs:
     log_dir: str
     train_steps: int
     beta_schedule: str
-    flip: bool
     eta: float
     device: str
     dataset_path: str
@@ -40,6 +40,7 @@ class InferenceArgs:
     plt_imgs: bool
     patch_imgs: bool
     run_id: str
+    batch_size: int
 
 
 def parse_args() -> InferenceArgs:
@@ -58,8 +59,6 @@ def parse_args() -> InferenceArgs:
                         help='name of the item within the MVTec Dataset to train on')
     parser.add_argument('--mvtec_item_states', type=str, nargs="+", default="all",
                         help="States of the mvtec items that should be used. Available options depend on the selected item. Set to 'all' to include all states")
-    parser.add_argument('--flip', action='store_true',
-                        help='whether to augment training data with a flip')
     parser.add_argument('--num_inference_steps', type=int, default=30,
                         help='At which timestep/how many timesteps should be regenerated')
     parser.add_argument('--start_at_timestep', type=int, default=300,
@@ -84,6 +83,8 @@ def parse_args() -> InferenceArgs:
                         help='Plot the images with matplot lib. I.e. call plt.show()')
     parser.add_argument('--patch_imgs', action='store_true',
                         help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
+    parser.add_argument('--batch_size', type=int, default=2,
+                        help='Number of images to process per batch')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -102,7 +103,6 @@ def main(args: InferenceArgs, writer: SummaryWriter):
             transforms.Resize(model_config["sample_size"],
                               interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(
                 lambda x: x),
-            transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -114,7 +114,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     # data loader
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, args.mvtec_item_states,
                              transform_images)
-    test_loader = DataLoader(test_data, batch_size=1, shuffle=args.shuffle)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=args.shuffle)
 
     # set model, optimizer, scheduler
     model = UNet2DModel(
@@ -125,6 +125,8 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     model.eval()
     model.to(args.device)
 
+    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) +1, 4)
+
     with torch.no_grad():
         # validate and generate images
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep,
@@ -133,27 +135,10 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         noise_kind = train_arg_config.get("noise_kind", "gaussian")
         eval_scores = Counter()
 
-        for i, (img, state, gt) in enumerate(test_loader):
-            original, reconstruction, diffmap, history = generate_single_sample(model, noise_scheduler_inference, img,
-                                                                                args.eta, args.num_inference_steps,
-                                                                                args.start_at_timestep, args.patch_imgs,
-                                                                                noise_kind)
-
-            anomaly_map = utils.anomalies.diff_map_to_anomaly_map(diffmap, .3)
-            overlay = add_overlay(original, anomaly_map)
-            eval_scores.update(scores(gt, anomaly_map))
-
-            plot_single_channel_imgs([gt, diffmap, anomaly_map], ["ground truth", "diff-map", "anomaly-map"],
-                                     cmaps=['gray', 'viridis', 'gray'],
-                                     save_to=f"{args.img_dir}/{i}_{state[0]}_heatmap.png", show_img=args.plt_imgs)
-            plot_rgb_imgs([original, reconstruction, overlay], ["original", "reconstructed", "overlay"],
-                          save_to=f"{args.img_dir}/{i}_{state[0]}.png", show_img=args.plt_imgs)
-
-            if writer is not None:
-                for t, im in zip(history["timesteps"], history["images"]):
-                    writer.add_images(f"{i}_{state[0]}_process", im, t)
-                writer.add_images(f"{i}_{state[0]}_results (ori, rec, diff, pred, gt)", torch.concat([original, reconstruction, gray_to_rgb(diffmap), gray_to_rgb(anomaly_map),
-                                                            gray_to_rgb(gt)]))
+        for i, (imgs, states, gts) in enumerate(test_loader):
+            run_inference_step(diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
+                               noise_scheduler_inference, states, writer, args.eta, args.num_inference_steps,
+                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, args.img_dir)
 
         for key in eval_scores:
             eval_scores[key] /= len(test_loader)
@@ -165,9 +150,40 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         print(eval_scores)
 
 
-if __name__ == '__main__':
-    args: InferenceArgs = parse_args()
-    writer = SummaryWriter(f'{args.log_dir}/{args.run_id}')
-    main(args, writer)
-    writer.flush()
-    writer.close()
+def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind, noise_scheduler_inference,
+                       states, writer, eta, num_inference_steps, start_at_timestep, patch_imgs, plt_imgs, img_dir):
+    originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference,
+                                                                     imgs,
+                                                                     eta, num_inference_steps,
+                                                                     start_at_timestep,
+                                                                     patch_imgs,
+                                                                     noise_kind)
+    anomaly_maps = utils.anomalies.diff_map_to_anomaly_map(diffmaps, .3, diffmap_blur)
+    overlays = add_batch_overlay(originals, anomaly_maps)
+    eval_scores.update(scores_batch(gts, anomaly_maps))
+    for idx in range(len(gts)):
+        if not os.path.exists(f"{img_dir}"):
+            os.makedirs(f"{img_dir}")
+
+        plot_single_channel_imgs([gts[idx], diffmaps[idx], anomaly_maps[idx]],
+                                 ["ground truth", "diff-map", "anomaly-map"],
+                                 cmaps=['gray', 'viridis', 'gray'],
+                                 save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
+        plot_rgb_imgs([originals[idx], reconstructions[idx], overlays[idx]], ["original", "reconstructed", "overlay"],
+                      save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)
+
+        if writer is not None:
+            for t, im in zip(history["timesteps"], history["images"]):
+                writer.add_images(f"{btc_idx}_{states[0]}_process", im[idx].unsqueeze(0), t)
+
+            writer.add_images(f"{btc_idx}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
+                [originals[idx], reconstructions[idx], gray_to_rgb(diffmaps[idx])[0], gray_to_rgb(anomaly_maps[idx])[0],
+                 gray_to_rgb(gts[idx])[0]]))
+
+
+# if __name__ == '__main__':
+#     args: InferenceArgs = parse_args()
+#     writer = SummaryWriter(f'{args.log_dir}/{args.run_id}') if args.log_dir else None
+#     main(args, writer)
+#     writer.flush()
+#     writer.close()

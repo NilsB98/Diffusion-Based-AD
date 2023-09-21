@@ -1,6 +1,9 @@
+from collections import Counter
+
 from torch import Tensor
 from typing import Dict
 import torch
+
 
 def pro(gt: Tensor, prediction: Tensor) -> float:
     """
@@ -15,6 +18,17 @@ def pro(gt: Tensor, prediction: Tensor) -> float:
     """
 
     return 0
+
+
+def scores_batch(gts: Tensor, predictions: Tensor) -> Dict[str, float]:
+    batch_score = Counter()
+
+    for gt, pred in zip(gts, predictions):
+        batch_score.update(scores(gt, pred))
+
+    for key in batch_score:
+        batch_score[key] /= len(gts)
+    return dict(batch_score)
 
 
 def scores(gt: Tensor, prediction: Tensor) -> Dict[str, float]:
@@ -38,12 +52,12 @@ def scores(gt: Tensor, prediction: Tensor) -> Dict[str, float]:
         # 'tn': tn,
         # 'fp': fp,
         # 'fn': fn,
-        'tpr': tp/(tp + fn) if tp+fn > 0 else 1,
-        'fnr': fn/(fn + tp) if tp+fn > 0 else 0,
-        'fpr': fp/(tn + fp),
-        'tnr': tn/(tn + fp),
+        'tpr': tp / (tp + fn) if tp + fn > 0 else 1,
+        'fnr': fn / (fn + tp) if tp + fn > 0 else 0,
+        'fpr': fp / (tn + fp),
+        'tnr': tn / (tn + fp),
         'acc': (tp + tn) / num_pixels,
-        'precision': tp / (tp + fp) if tp+fp > 0 else 1,
-        'f1': 2*tp / (2*tp + fp + fn) if (tp + fp + fn) > 0 else 1,
+        'precision': tp / (tp + fp) if tp + fp > 0 else 1,
+        'f1': 2 * tp / (2 * tp + fp + fn) if (tp + fp + fn) > 0 else 1,
         'img_acc': 1 if gt.max() == 0 and prediction.max() == 0 or gt.max() == 1 and prediction.max() == 1 else 0
     }
