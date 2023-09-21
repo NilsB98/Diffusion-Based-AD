@@ -3,19 +3,23 @@ import json
 import os.path
 import time
 import argparse
+from collections import Counter
 
 from torch.utils.data import DataLoader
 import torch
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
+import inference_ddim
 from pipe.train import train_step
 from pipe.validate import validate_step
 from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
+import diffusers
 from tqdm import tqdm
 from loader.loader import MVTecDataset
+from utils.anomalies import diff_map_to_anomaly_map
 from utils.files import save_args
-from utils.visualize import generate_samples
+from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
 from dataclasses import dataclass
 from schedulers.scheduling_ddim import DDIMScheduler
 from schedulers.scheduling_ddpm import DBADScheduler
@@ -42,6 +46,9 @@ class TrainArgs:
     batch_size: int
     noise_kind: str
     crop: bool
+    plt_imgs: bool
+    img_dir: str
+    calc_val_loss: bool
 
 
 def parse_args() -> TrainArgs:
@@ -87,6 +94,12 @@ def parse_args() -> TrainArgs:
                         help='Kind of noise to use for the noising steps.')
     parser.add_argument('--crop', action='store_true',
                         help='If set: the image will be cropped to the resolution instead of resized.')
+    parser.add_argument('--plt_imgs', action='store_true',
+                        help='If set: plot the images with matplotlib')
+    parser.add_argument('--calc_val_loss', action='store_true',
+                        help='If set: calculate not only the train loss, but also the validation loss during each epoch')
+    parser.add_argument('--img_dir', type=str, default=None,
+                        help='Directory to store the images created during the run. A new directory with the run-id will be created in this directory. If not used images wont be stored except for tensorboard.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -94,7 +107,7 @@ def parse_args() -> TrainArgs:
 def transform_imgs_test(imgs):
     augmentations = transforms.Compose(
         [
-            transforms.CenterCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -106,7 +119,7 @@ def transform_imgs_test(imgs):
 def transform_imgs_train(imgs):
     augmentations = transforms.Compose(
         [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.RandomRotation(args.rotate),
             transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
@@ -125,7 +138,7 @@ def main(args: TrainArgs):
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
                              transform_imgs_test)
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=2, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
     channel_multiplier = {
@@ -151,7 +164,10 @@ def main(args: TrainArgs):
     )
 
     noise_scheduler = DDPMScheduler(args.train_steps, beta_schedule=args.beta_schedule)
-    # noise_scheduler = DBADScheduler(args.train_steps, beta_schedule=args.beta_schedule)
+    inf_noise_scheduler = DDIMScheduler(args.train_steps, 150,
+                                        beta_schedule=args.beta_schedule, timestep_spacing="leading",
+                                        reconstruction_weight=args.reconstruction_weight)
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         weight_decay=1e-6,
@@ -171,10 +187,14 @@ def main(args: TrainArgs):
     # additional info/util
     timestamp = str(time.time())[:11]
     writer = SummaryWriter(f'{args.log_dir}/{args.run_name}_{timestamp}')
+    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
+    run_id = f"{args.run_name}_{timestamp}"
+    print(diffusers.utils.logging.is_progress_bar_enabled())
+    diffusers.utils.logging.disable_progress_bar()
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    print(f"run_id: {args.run_name}_{timestamp}")
+    print(f"run_id: {run_id}")
     save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "train_arg_config")
     save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
 
@@ -187,7 +207,7 @@ def main(args: TrainArgs):
 
         running_loss_train = 0
 
-        for btc_num, (batch, label) in enumerate(train_loader):
+        for btc_num, (batch, _) in enumerate(train_loader):
             loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
 
             running_loss_train += loss
@@ -195,29 +215,28 @@ def main(args: TrainArgs):
 
         running_loss_test = 0
         with torch.no_grad():
-            for btc_num, (batch, label, gt) in enumerate(test_loader):
-                loss = validate_step(model, batch, noise_scheduler, args.train_steps, loss_fn)
+            scores = Counter()
+            for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
+                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn) if args.calc_val_loss else 0
 
                 running_loss_test += loss
+
+                writer.add_scalars(main_tag='scores', tag_scalar_dict=dict(scores), global_step=epoch)
                 progress_bar.update(1)
 
-            progress_bar.set_postfix_str(
-                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}")
-            progress_bar.close()
-
             if epoch % 100 == 0:
-                # generate images
-                # TODO use method from inference script
-                noise_scheduler_inference = DDIMScheduler(args.train_steps, beta_schedule=args.beta_schedule,
-                                                          reconstruction_weight=args.reconstruction_weight)
-                train_grid, train_mask = generate_samples(model, noise_scheduler_inference, f"Train samples {epoch=}",
-                                                          next(iter(train_loader))[0], args.eta, steps_to_regenerate=20,
-                                                          start_at_timestep=200)
-                test_grid, test_mask = generate_samples(model, noise_scheduler_inference, f"Test samples {epoch=}",
-                                                        next(iter(test_loader))[0], args.eta, steps_to_regenerate=20,
-                                                        start_at_timestep=200)
+                # runs it only for the last batch
+                inference_ddim.run_inference_step(diffmap_blur, scores, gts, _btc_num, _batch, model,
+                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta,
+                                                  15, 150, args.crop, args.plt_imgs,
+                                                  os.path.join(args.img_dir, run_id))
 
-                writer.add_image(f'Test samples', test_grid, epoch)
+            for key in scores:
+                scores[key] /= len(test_loader)
+
+            progress_bar.set_postfix_str(
+                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}, {dict(scores)}")
+            progress_bar.close()
 
             if epoch % args.save_n_epochs == 0 and epoch > 0:
                 torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{epoch}.pt")

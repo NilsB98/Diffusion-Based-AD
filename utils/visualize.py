@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -9,50 +11,11 @@ from PIL import Image
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
 
-def generate_samples(model, noise_scheduler, plt_title, original_images, eta, steps_to_regenerate, start_at_timestep, show_plt=True):
-    pipeline = DDIMReconstructionPipeline(
-        unet=model,
-        scheduler=noise_scheduler,
-    )
 
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    images = pipeline(
-        batch_size=8,
-        generator=generator,
-        num_inference_steps=steps_to_regenerate,
-        original_images=original_images.to(model.device),
-        eta=eta,
-        start_at_timestep=start_at_timestep,
-        output_type="numpy",
-    ).images
-
-    images_processed = (images * 255).round().astype("int")
-    images = torch.from_numpy(images_processed)
-    # images = torch.permute(images, (0, 3, 1, 2))
-
-    original_images = transforms.Normalize([-0.5 * 2], [2])(original_images)
-    originals = (original_images * 255).round().type(torch.int32)
-
-    diff_map = (originals - images) ** 2
-    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
-    diff_map = (diff_map * 255).round()
-    diff_map = transforms.functional.rgb_to_grayscale(diff_map).to(torch.uint8)
-
-    grid_generated_imgs = make_grid(torch.cat((images.to(torch.uint8), originals.to(torch.uint8)), 0), 4)
-    grid_mask = make_grid(diff_map, 4)
-    plt.imshow(transforms.functional.rgb_to_grayscale(grid_mask).to(torch.uint8).squeeze(), cmap='viridis')
-    plt.colorbar()
-    plt.show()
-    if show_plt:
-        show(grid_generated_imgs, plt_title)
-        show(grid_mask, plt_title + ' mask')
-
-    return grid_generated_imgs, grid_mask
-
-
-def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to_regenerate, start_at_timestep, patch_imgs=False, noise_kind='gaussian'):
+def generate_samples(model, noise_scheduler, original_images, eta, steps_to_regenerate, start_at_timestep, patch_imgs=False, noise_kind='gaussian'):
+    num_imgs = len(original_images)
     if patch_imgs:
-        original_image = split_into_patches(original_image[0], model.sample_size)
+        original_images = split_batch_into_patch(original_images, model.sample_size)
 
     pipeline = DDIMReconstructionPipeline(
         unet=model,
@@ -63,10 +26,10 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
     # run pipeline in inference (sample random noise and denoise)
     pipe_output = pipeline(
-        batch_size=1,
+        batch_size=len(original_images),
         generator=generator,
         num_inference_steps=steps_to_regenerate,
-        original_images=original_image.to(model.device),
+        original_images=original_images.to(model.device),
         eta=eta,
         start_at_timestep=start_at_timestep,
         output_type="numpy",
@@ -74,21 +37,20 @@ def generate_single_sample(model, noise_scheduler, original_image, eta, steps_to
     reconstruction = pipe_output.images
     history = pipe_output.history
 
-    # images_processed = (reconstruction * 255).round().astype("int")
     reconstruction = torch.from_numpy(reconstruction)
 
-    original = unnormalize_original_img(original_image)
+    original = unnormalize_original_img(original_images)
 
     if patch_imgs:
-        reconstruction = stitch_patches(reconstruction)
-        original = stitch_patches(original)
+        reconstruction = stitch_batch_patches(reconstruction, num_imgs)
+        original = stitch_batch_patches(original, num_imgs)
 
     # TODO try using (diff_map > 0.5).float() directly as the anomaly map => i.e. no diffmap to plot
     diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
     diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
     # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
     diff_map = torch.amax(diff_map, (1))[:, None, :, :]
-    history["images"] = [output_to_img(output) for output in history["images"]]
+    history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
 
     return original, reconstruction, diff_map, history
 
@@ -141,21 +103,32 @@ def show(imgs, title):
     plt.show()
 
 
-def output_to_img(output):
-    # img = (output * 255).round().astype("int")
+def output_to_img(output, num_imgs):
     img = torch.from_numpy(output)
-    img = stitch_patches(img)
+    img = stitch_batch_patches(img, num_imgs)
     return img
 
 
 def unnormalize_original_img(original_image):
     original_image = transforms.Normalize([-0.5 * 2], [2])(original_image)
-    # original = (original_image * 255).round().type(torch.int32)
     return original_image
 
 
 def gray_to_rgb(image: torch.Tensor):
     return image.repeat((1, 3, 1, 1))
+
+def split_batch_into_patch(batch: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """
+    Takes a batch of images and splits each of them into a batch of images.
+    The patches belonging to one image will be next to each other.
+
+    :param batch: Batch of images to split with shape (B, CH, H, W)
+    :param patch_size: Size of the patches to be created.
+    :return: batch of patches shape: (B*(H/patch_size)**2), CH, patch_size, patch_size)
+    """
+
+    patches = [split_into_patches(img, patch_size) for img in torch.unbind(batch)]
+    return torch.cat(patches)
 
 def split_into_patches(image: torch.Tensor, patch_size: int) -> torch.Tensor:
     """
@@ -177,6 +150,13 @@ def split_into_patches(image: torch.Tensor, patch_size: int) -> torch.Tensor:
 
     return patches
 
+def stitch_batch_patches(patches: torch.Tensor, num_imgs: int) -> torch.Tensor:
+    ppi = patches.shape[0] // num_imgs  # number of patches per image
+    img_list = [stitch_patches(patches[ppi * i:ppi * (i + 1)]) for i in range(num_imgs)]
+    return torch.cat(img_list)
+
+
+
 def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
     """
     Stitch patches of images back together. (Inverse operation to @split_into_patches)
@@ -196,6 +176,17 @@ def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
     stitched = torch.cat(rows, dim=1)
 
     return stitched.unsqueeze(0)
+
+def add_batch_overlay(imgs: torch.Tensor, overlays: torch.Tensor) -> torch.Tensor:
+    """
+    Wrapper for add_overlay() to add an overlay to each image
+
+    :param imgs: batch of images
+    :param overlays: batch of single-channel overlays
+    :return: batch of tensors with blend of image and overlay
+    """
+
+    return torch.stack([add_overlay(img, overlay) for (img, overlay) in zip(imgs, overlays)])
 
 def add_overlay(img: torch.Tensor, overlay: torch.Tensor) -> torch.Tensor:
     """
