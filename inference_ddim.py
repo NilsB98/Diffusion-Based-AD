@@ -158,6 +158,7 @@ def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noi
                                                                      start_at_timestep,
                                                                      patch_imgs,
                                                                      noise_kind)
+
     anomaly_maps = utils.anomalies.diff_map_to_anomaly_map(diffmaps, .3, diffmap_blur)
     overlays = add_batch_overlay(originals, anomaly_maps)
     eval_scores.update(scores_batch(gts, anomaly_maps))
@@ -181,9 +182,9 @@ def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noi
                  gray_to_rgb(gts[idx])[0]]))
 
 
-# if __name__ == '__main__':
-#     args: InferenceArgs = parse_args()
-#     writer = SummaryWriter(f'{args.log_dir}/{args.run_id}') if args.log_dir else None
-#     main(args, writer)
-#     writer.flush()
-#     writer.close()
+if __name__ == '__main__':
+    args: InferenceArgs = parse_args()
+    writer = SummaryWriter(f'{args.log_dir}/{args.run_id}') if args.log_dir else None
+    main(args, writer)
+    writer.flush()
+    writer.close()

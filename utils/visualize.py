@@ -8,6 +8,7 @@ from torchvision.utils import make_grid
 import torchvision.transforms.functional as F
 from PIL import Image
 
+from feature_extractor import get_feature_extractor, compare_features
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
 
@@ -46,13 +47,31 @@ def generate_samples(model, noise_scheduler, original_images, eta, steps_to_rege
         original = stitch_batch_patches(original, num_imgs)
 
     # TODO try using (diff_map > 0.5).float() directly as the anomaly map => i.e. no diffmap to plot
-    diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
-    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
-    # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
-    diff_map = torch.amax(diff_map, (1))[:, None, :, :]
+    diff_map = create_diffmap(original, reconstruction)
     history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
 
     return original, reconstruction, diff_map, history
+
+
+def create_diffmap(original, reconstruction):
+    with torch.no_grad():
+
+        # pixel-level
+        diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
+        # diff_map = torch.where(diff_map < 1, diff_map, 1)
+        diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
+        # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
+        diff_map = torch.amax(diff_map, (1))[:, None, :, :]
+
+        # feature-level
+        num_imgs = len(original)
+        original = split_batch_into_patch(original, 256)
+        reconstruction = split_batch_into_patch(reconstruction, 256)
+        fe = get_feature_extractor(r"checkpoints/feature_extractor/extractor.pt")
+        fl_diff_map = compare_features(fe, original, reconstruction)
+        fl_diff_map = stitch_batch_patches(fl_diff_map, num_imgs)
+
+    return diff_map
 
 
 def plot_single_channel_imgs(imgs, titles, cmaps=None, save_to=None, show_img=False):
