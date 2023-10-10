@@ -161,7 +161,7 @@ class DDIMReconstructionPipeline(DiffusionPipeline):
         if not return_dict:
             return image_cp, history
 
-        return DBADPipelineOutput(images=post_process_img(image, np_ordering=False), history=history)
+        return DBADPipelineOutput(images=post_process_img(image, output_type, np_ordering=False), history=history)
 
 
 def post_process_img(image, output_type="numpy", np_ordering=True):

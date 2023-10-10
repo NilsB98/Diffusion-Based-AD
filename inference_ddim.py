@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from collections import Counter
 from dataclasses import dataclass
 
 import torch
@@ -10,14 +11,14 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
-import utils.anomalies
+# import utils.anomalies
+from utils import anomalies
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.metrics import scores, scores_batch
+from utils.metrics import scores_batch
 from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
-    split_into_patches, add_overlay, add_batch_overlay
-from collections import Counter
+    add_batch_overlay
 
 
 @dataclass
@@ -125,14 +126,14 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     model.eval()
     model.to(args.device)
 
-    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) +1, 4)
+    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
 
     with torch.no_grad():
         # validate and generate images
+        noise_kind = train_arg_config.get("noise_kind", "gaussian")
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep,
                                                   beta_schedule=args.beta_schedule, timestep_spacing="leading",
-                                                  reconstruction_weight=args.reconstruction_weight)
-        noise_kind = train_arg_config.get("noise_kind", "gaussian")
+                                                  reconstruction_weight=args.reconstruction_weight, noise_type=noise_kind)
         eval_scores = Counter()
 
         for i, (imgs, states, gts) in enumerate(test_loader):
@@ -151,24 +152,32 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
 
 def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind, noise_scheduler_inference,
-                       states, writer, eta, num_inference_steps, start_at_timestep, patch_imgs, plt_imgs, img_dir):
+                       states, writer, eta, num_inference_steps, start_at_timestep, patch_imgs, plt_imgs, img_dir,
+                       pl_counter=None, fl_counter=None):
     originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference,
                                                                      imgs,
                                                                      eta, num_inference_steps,
                                                                      start_at_timestep,
                                                                      patch_imgs,
                                                                      noise_kind)
+    # analysis of thresholds:
+    if pl_counter is not None and fl_counter is not None:
+        anomalies.count_values(diffmaps[0], factor=1000, counter=pl_counter)
+        anomalies.count_values(diffmaps[1], factor=1000, counter=fl_counter)
 
-    anomaly_maps = utils.anomalies.diff_map_to_anomaly_map(diffmaps, .3, diffmap_blur)
+    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [0.029, 0.3370], diffmap_blur)
     overlays = add_batch_overlay(originals, anomaly_maps)
-    eval_scores.update(scores_batch(gts, anomaly_maps))
+
+    if eval_scores is not None:
+        eval_scores.update(scores_batch(gts, anomaly_maps))
+
     for idx in range(len(gts)):
         if not os.path.exists(f"{img_dir}"):
             os.makedirs(f"{img_dir}")
 
-        plot_single_channel_imgs([gts[idx], diffmaps[idx], anomaly_maps[idx]],
-                                 ["ground truth", "diff-map", "anomaly-map"],
-                                 cmaps=['gray', 'viridis', 'gray'],
+        plot_single_channel_imgs([gts[idx], diffmaps[0][idx], diffmaps[1][idx], anomaly_maps[idx]],
+                                 ["ground truth", "diff-map-pl", "diff-map-fl", "anomaly-map"],
+                                 cmaps=['gray', 'viridis', 'viridis', 'gray'], vmaxs=[1, 0.029, 0.3370, 1],
                                  save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
         plot_rgb_imgs([originals[idx], reconstructions[idx], overlays[idx]], ["original", "reconstructed", "overlay"],
                       save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)

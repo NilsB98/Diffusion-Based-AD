@@ -1,34 +1,29 @@
 # imports
-import json
+import argparse
 import os.path
 import time
-import argparse
 from collections import Counter
+from dataclasses import dataclass
 
-from torch.utils.data import DataLoader
+import diffusers
 import torch
-from torchvision import transforms
+from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
+from tqdm import tqdm
 
 import inference_ddim
+from loader.loader import MVTecDataset
 from pipe.train import train_step
 from pipe.validate import validate_step
-from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
-import diffusers
-from tqdm import tqdm
-from loader.loader import MVTecDataset
-from utils.anomalies import diff_map_to_anomaly_map
-from utils.files import save_args
-from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
-from dataclasses import dataclass
 from schedulers.scheduling_ddim import DDIMScheduler
-from schedulers.scheduling_ddpm import DBADScheduler
+from utils.files import save_args
 
 
 @dataclass
 class TrainArgs:
     checkpoint_dir: str
-    log_dir: str
     run_name: str
     mvtec_item: str
     flip: bool
@@ -46,17 +41,12 @@ class TrainArgs:
     batch_size: int
     noise_kind: str
     crop: bool
-    plt_imgs: bool
-    img_dir: str
-    calc_val_loss: bool
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
                         help='directory path to store the checkpoints')
-    parser.add_argument('--log_dir', type=str, default="logs",
-                        help='directory path to store logs')
     parser.add_argument('--run_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
     parser.add_argument('--mvtec_item', type=str, required=True,
@@ -94,12 +84,6 @@ def parse_args() -> TrainArgs:
                         help='Kind of noise to use for the noising steps.')
     parser.add_argument('--crop', action='store_true',
                         help='If set: the image will be cropped to the resolution instead of resized.')
-    parser.add_argument('--plt_imgs', action='store_true',
-                        help='If set: plot the images with matplotlib')
-    parser.add_argument('--calc_val_loss', action='store_true',
-                        help='If set: calculate not only the train loss, but also the validation loss during each epoch')
-    parser.add_argument('--img_dir', type=str, default=None,
-                        help='Directory to store the images created during the run. A new directory with the run-id will be created in this directory. If not used images wont be stored except for tensorboard.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -166,7 +150,7 @@ def main(args: TrainArgs):
     noise_scheduler = DDPMScheduler(args.train_steps, beta_schedule=args.beta_schedule)
     inf_noise_scheduler = DDIMScheduler(args.train_steps, 150,
                                         beta_schedule=args.beta_schedule, timestep_spacing="leading",
-                                        reconstruction_weight=args.reconstruction_weight)
+                                        reconstruction_weight=args.reconstruction_weight, noise_type=args.noise_kind)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),

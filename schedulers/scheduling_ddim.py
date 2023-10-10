@@ -207,9 +207,11 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
         sample_max_value: float = 1.0,
         timestep_spacing: str = "leading",
         rescale_betas_zero_snr: bool = False,
-        reconstruction_weight = 0
+        reconstruction_weight = 0,
+        noise_type="gaussian"
     ):
         self.reconstruction_weight = reconstruction_weight
+        self.noise_type = noise_type
 
         if trained_betas is not None:
             self.betas = torch.tensor(trained_betas, dtype=torch.float32)
@@ -477,10 +479,14 @@ class DDIMScheduler(SchedulerMixin, ConfigMixin):
                 )
 
             if variance_noise is None:
-                variance_noise = randn_tensor(
-                    model_output.shape, generator=generator, device=model_output.device, dtype=model_output.dtype
-                )
-                variance_noise = simplexGenerator.batch_3d_octaves(model_output.shape, 6, 0.6).to(model_output.device)# perlin_2d_batch(model_output.shape, (8, 8)).to(model_output.device)
+                if self.noise_type == "gaussian":
+                    variance_noise = randn_tensor(
+                        model_output.shape, generator=generator, device=model_output.device, dtype=model_output.dtype
+                    )
+                elif self.noise_type == "simplex":
+                    variance_noise = simplexGenerator.batch_3d_octaves(model_output.shape, 6, 0.6).to(model_output.device)# perlin_2d_batch(model_output.shape, (8, 8)).to(model_output.device)
+                else:
+                    raise ValueError(f"unknown noise type: {self.noise_type}")
             variance = std_dev_t * variance_noise
 
             prev_sample = prev_sample + variance
