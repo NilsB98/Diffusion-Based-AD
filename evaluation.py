@@ -7,6 +7,7 @@ from diffusers import UNet2DModel
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
+import feature_extraction
 from inference_ddim import InferenceArgs, run_inference_step, parse_args
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
@@ -50,6 +51,10 @@ def eval_diffmap_threshold(args: InferenceArgs):
 
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
 
+    extractor = feature_extraction.ResNetFE(args.extractor_path)
+    extractor.eval()
+    extractor.to(args.device)
+
     with torch.no_grad():
         # validate and generate images
         noise_kind = train_arg_config.get("noise_kind", "gaussian")
@@ -61,9 +66,9 @@ def eval_diffmap_threshold(args: InferenceArgs):
         pl_counter = Counter()
         fl_counter = Counter()
         for i, (imgs, states) in enumerate(test_loader):
-            run_inference_step(diffmap_blur, None, [], i, imgs, model, noise_kind,
-                               noise_scheduler_inference, states, None, args.eta, args.num_inference_steps,
-                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, args.img_dir, pl_counter, fl_counter)
+            run_inference_step(extractor, diffmap_blur, None, [], i, imgs, model, noise_kind, noise_scheduler_inference,
+                               states, None, args.eta, args.num_inference_steps, args.start_at_timestep,
+                               args.patch_imgs, args.plt_imgs, args.img_dir, pl_counter, fl_counter)
 
         threshold_pl = calc_threshold(dict(pl_counter), .999, 1000)
         threshold_fl = calc_threshold(dict(fl_counter), .999, 1000)

@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from tqdm import tqdm
 
+import feature_extraction
 import inference_ddim
 from loader.loader import MVTecDataset
 from pipe.train import train_step
@@ -41,12 +42,21 @@ class TrainArgs:
     batch_size: int
     noise_kind: str
     crop: bool
+    log_dir: str
+    img_dir: str
+    plt_imgs: bool
+    calc_val_loss: bool
+    extractor_path: str
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
                         help='directory path to store the checkpoints')
+    parser.add_argument('--log_dir', type=str, default="logs",
+                        help='directory path to store the checkpoints')
+    parser.add_argument('--img_dir', type=str, default=None,
+                        help='directory path to store the generated images in. Will create a new sub-directory.')
     parser.add_argument('--run_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
     parser.add_argument('--mvtec_item', type=str, required=True,
@@ -73,6 +83,8 @@ def parse_args() -> TrainArgs:
                         help='directory path to the (mvtec) dataset')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
+    parser.add_argument('--extractor_path', type=str,
+                        help='Path to the feature extractor. This is extractor is used to calculate differences between original and reconstructed images in a deep learning fashion.')
     parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
                         help='Influence of the original sample during inference (doesnt affect training)')
     parser.add_argument('--eta', type=float, default=0,
@@ -84,6 +96,10 @@ def parse_args() -> TrainArgs:
                         help='Kind of noise to use for the noising steps.')
     parser.add_argument('--crop', action='store_true',
                         help='If set: the image will be cropped to the resolution instead of resized.')
+    parser.add_argument('--plt_imgs', action='store_true',
+                        help='If set: Plot images via matplotlib')
+    parser.add_argument('--calc_val_loss', action='store_true',
+                        help='If set: Calculate the validation loss as well as the train loss.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
@@ -168,6 +184,10 @@ def main(args: TrainArgs):
     )
     loss_fn = torch.nn.MSELoss()
 
+    extractor = feature_extraction.ResNetFE(args.extractor_path)
+    extractor.eval()
+    extractor.to(args.device)
+
     # additional info/util
     timestamp = str(time.time())[:11]
     writer = SummaryWriter(f'{args.log_dir}/{args.run_name}_{timestamp}')
@@ -186,7 +206,8 @@ def main(args: TrainArgs):
         model.train()
         model.to(args.device)
 
-        progress_bar = tqdm(total=len(train_loader) + len(test_loader))
+        progress_bar_len = len(train_loader) + len(test_loader) if args.calc_val_loss else len(train_loader)
+        progress_bar = tqdm(total=progress_bar_len)
         progress_bar.set_description(f"Epoch {epoch}")
 
         running_loss_train = 0
@@ -210,10 +231,9 @@ def main(args: TrainArgs):
 
             if epoch % 100 == 0:
                 # runs it only for the last batch
-                inference_ddim.run_inference_step(diffmap_blur, scores, gts, _btc_num, _batch, model,
-                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta,
-                                                  15, 150, args.crop, args.plt_imgs,
-                                                  os.path.join(args.img_dir, run_id))
+                inference_ddim.run_inference_step(extractor, diffmap_blur, scores, gts, _btc_num, _batch, model,
+                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 15,
+                                                  150, args.crop, args.plt_imgs, os.path.join(args.img_dir, run_id))
 
             for key in scores:
                 scores[key] /= len(test_loader)

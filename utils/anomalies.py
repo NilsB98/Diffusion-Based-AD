@@ -20,7 +20,7 @@ def diff_maps_to_anomaly_map(diff_maps: List[Tensor], thresholds: List[float], t
     # aggregate diffmaps and normalize each by threshold, s.t. the threshold for each one is at 1 and summation makes
     # sense
     for i in range(len(diff_maps)):
-        diff_map += diff_maps[i] / thresholds[i]
+        diff_map += diff_maps[i] / thresholds[i] * .7
 
     return torch.where(diff_map >= 1, 1, 0)
 

@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Callable
 
 import torch
 from torch import nn
@@ -102,12 +102,59 @@ class AETrainer:
                 loss.backward()
                 self.optimizer.step()
                 train_loss += loss.item()
+            train_loss /= len(self.train_loader)
 
             test_loss = 0
             with torch.no_grad():
                 self.model.eval()
 
-                for batch, _ in self.test_loader:
+                for batch, _, _ in self.test_loader:
+                    batch = batch.to(torch.device('cuda:0'))
+
+                    reconstructed = self.model(batch)
+
+                    loss = self.loss_fn(reconstructed, batch)
+                    test_loss += loss.item()
+                self.model.train()
+                test_loss /= len(self.test_loader)
+                print(f"epoch {epoch}: {test_loss=:.5f} {train_loss=:.5f}")
+
+
+class DBTrainer(AETrainer):
+    """
+    Diffusion-Based Trainer ot the auto-encoder
+    """
+
+    def __init__(self, model: nn.Module, diffusion_generator: Callable[[torch.Tensor], torch.Tensor], train_loader, test_loader):
+        super().__init__(model, train_loader, test_loader)
+        self.diffusion_generator = diffusion_generator
+
+    def train(self, epochs):
+        self.model.train()
+        self.model = self.model.to(self.device)
+
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+        for epoch in range(epochs):
+            train_loss = 0
+            for batch, _ in self.train_loader:
+                batch = batch.to(torch.device('cuda:0'))
+
+                undiffused_imgs = self.diffusion_generator(batch).to(torch.device('cuda:0'))
+                reconstructed = self.model(batch)
+
+                loss = self.loss_fn(reconstructed, undiffused_imgs)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                train_loss += loss.item()
+
+            test_loss = 0
+            with torch.no_grad():
+                self.model.eval()
+
+                for batch, _, _ in self.test_loader:
                     batch = batch.to(torch.device('cuda:0'))
 
                     reconstructed = self.model(batch)
@@ -116,4 +163,3 @@ class AETrainer:
                     test_loss += loss.item()
                 self.model.train()
                 print(f"epoch {epoch}: {test_loss=:.5f} {train_loss=:.5f}")
-

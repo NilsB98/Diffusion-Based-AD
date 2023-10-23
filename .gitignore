@@ -1,5 +1,6 @@
 /logs/*
 /checkpoints/*
 /.idea/*
+/generated_imgs/*
 
 tst.py

@@ -9,7 +9,7 @@ import feature_extraction
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
 
-def generate_samples(model, noise_scheduler, original_images, eta, steps_to_regenerate, start_at_timestep,
+def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
                      patch_imgs=False, noise_kind='gaussian'):
     num_imgs = len(original_images)
     if patch_imgs:
@@ -42,33 +42,32 @@ def generate_samples(model, noise_scheduler, original_images, eta, steps_to_rege
         reconstruction = stitch_batch_patches(reconstruction, num_imgs)
         original = stitch_batch_patches(original, num_imgs)
 
-    # TODO try using (diff_map > 0.5).float() directly as the anomaly map => i.e. no diffmap to plot
-    diff_maps = create_diffmaps(original, reconstruction)
+    diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size)
     history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
 
     return original.cpu(), reconstruction.cpu(), diff_maps, history
 
 
-def create_diffmaps(original, reconstruction):
+def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int):
     with torch.no_grad():
+        diff_maps = []
+
         # pixel-level
-        diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
-        # diff_map = torch.where(diff_map < 1, diff_map, 1)
-        # diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
-        # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
+        diff_map = (original - reconstruction) ** 2
         pl_diff_map = torch.amax(diff_map, (1))[:, None, :, :]
+        diff_maps.append(pl_diff_map)
 
         # feature-level
         num_imgs = len(original)
-        original = split_batch_into_patch(original, 256)
-        reconstruction = split_batch_into_patch(reconstruction, 256)
+        original = split_batch_into_patch(original, extractor_resolution)
+        reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
 
-        resnet_fe = feature_extraction.ResNetFE("checkpoints/feature_extractor/hazelnut_resnet_ds.pt")
-        resnet_fe = resnet_fe.to(original.device)
-        resnet_diffmap = feature_extraction.utils.create_fl_diffmap(resnet_fe, original, reconstruction)
-        resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
+        if extractor is not None:
+            resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction)
+            resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
+            diff_maps.append(resnet_diffmap)
 
-    return [pl_diff_map.cpu(), resnet_diffmap.cpu()]
+        return diff_maps
 
 
 def plot_single_channel_imgs(imgs, titles, cmaps=None, vmaxs=None, save_to=None, show_img=False):

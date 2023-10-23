@@ -11,12 +11,13 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
+import feature_extraction
 # import utils.anomalies
 from utils import anomalies
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.metrics import scores_batch
+from utils.metrics import scores_batch, aggregate_img_scores, normalize_pxl_scores
 from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
     add_batch_overlay
 
@@ -42,7 +43,7 @@ class InferenceArgs:
     patch_imgs: bool
     run_id: str
     batch_size: int
-
+    extractor_path: str
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -74,6 +75,8 @@ def parse_args() -> InferenceArgs:
                         help='id of the run, required for the logging')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
+    parser.add_argument('--extractor_path', type=str,
+                        help='Path to the feature extractor. This is extractor is used to calculate differences between original and reconstructed images in a deep learning fashion.')
     parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
                         help='Influence of the original sample during generation')
     parser.add_argument('--eta', type=float, default=0,
@@ -126,6 +129,10 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     model.eval()
     model.to(args.device)
 
+    extractor = feature_extraction.ResNetFE(args.extractor_path)
+    extractor.eval()
+    extractor.to(args.device)
+
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
 
     with torch.no_grad():
@@ -137,12 +144,13 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         eval_scores = Counter()
 
         for i, (imgs, states, gts) in enumerate(test_loader):
-            run_inference_step(diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
+            run_inference_step(extractor, diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
                                noise_scheduler_inference, states, writer, args.eta, args.num_inference_steps,
                                args.start_at_timestep, args.patch_imgs, args.plt_imgs, args.img_dir)
 
-        for key in eval_scores:
-            eval_scores[key] /= len(test_loader)
+        normalize_pxl_scores(len(test_loader), eval_scores)
+        aggregate_img_scores(eval_scores)
+
         writer.add_hparams({'category': args.mvtec_item, 'eta': args.eta,
                             'recon_weight': args.reconstruction_weight, 'states': ','.join(args.mvtec_item_states),
                             't': args.start_at_timestep, 'num_steps': args.num_inference_steps,
@@ -151,21 +159,18 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         print(eval_scores)
 
 
-def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind, noise_scheduler_inference,
-                       states, writer, eta, num_inference_steps, start_at_timestep, patch_imgs, plt_imgs, img_dir,
-                       pl_counter=None, fl_counter=None):
-    originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference,
-                                                                     imgs,
-                                                                     eta, num_inference_steps,
-                                                                     start_at_timestep,
-                                                                     patch_imgs,
+def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind,
+                       noise_scheduler_inference, states, writer, eta, num_inference_steps, start_at_timestep,
+                       patch_imgs, plt_imgs, img_dir, pl_counter=None, fl_counter=None):
+    originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference, extractor, imgs, eta,
+                                                                     num_inference_steps, start_at_timestep, patch_imgs,
                                                                      noise_kind)
     # analysis of thresholds:
     if pl_counter is not None and fl_counter is not None:
         anomalies.count_values(diffmaps[0], factor=1000, counter=pl_counter)
         anomalies.count_values(diffmaps[1], factor=1000, counter=fl_counter)
 
-    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [0.029, 0.3370], diffmap_blur)
+    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [0.0760, 0.2140], diffmap_blur)  # TODO extract thresholds
     overlays = add_batch_overlay(originals, anomaly_maps)
 
     if eval_scores is not None:
@@ -175,11 +180,11 @@ def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noi
         if not os.path.exists(f"{img_dir}"):
             os.makedirs(f"{img_dir}")
 
-        plot_single_channel_imgs([gts[idx], diffmaps[0][idx], diffmaps[1][idx], anomaly_maps[idx]],
+        plot_single_channel_imgs([gts[idx].cpu(), diffmaps[0][idx].cpu(), diffmaps[1][idx].cpu(), anomaly_maps[idx].cpu()],
                                  ["ground truth", "diff-map-pl", "diff-map-fl", "anomaly-map"],
-                                 cmaps=['gray', 'viridis', 'viridis', 'gray'], vmaxs=[1, 0.029, 0.3370, 1],
+                                 cmaps=['gray', 'viridis', 'viridis', 'gray'], vmaxs=[1, 0.0760, 0.2140, 1],
                                  save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
-        plot_rgb_imgs([originals[idx], reconstructions[idx], overlays[idx]], ["original", "reconstructed", "overlay"],
+        plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
                       save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)
 
         if writer is not None:
@@ -187,8 +192,8 @@ def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noi
                 writer.add_images(f"{btc_idx}_{states[0]}_process", im[idx].unsqueeze(0), t)
 
             writer.add_images(f"{btc_idx}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
-                [originals[idx], reconstructions[idx], gray_to_rgb(diffmaps[idx])[0], gray_to_rgb(anomaly_maps[idx])[0],
-                 gray_to_rgb(gts[idx])[0]]))
+                [originals[idx].cpu(), reconstructions[idx].cpu(), gray_to_rgb(diffmaps[idx])[0].cpu(), gray_to_rgb(anomaly_maps[idx].cpu())[0],
+                 gray_to_rgb(gts[idx].cpu())[0]]))
 
 
 if __name__ == '__main__':
