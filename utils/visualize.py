@@ -10,7 +10,7 @@ from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
 
 def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
-                     patch_imgs=False, noise_kind='gaussian'):
+                     patch_imgs=False, noise_kind='gaussian', fl_smoothing_kernel_size=3):
     num_imgs = len(original_images)
     if patch_imgs:
         original_images = split_batch_into_patch(original_images, model.sample_size)
@@ -42,13 +42,13 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
         reconstruction = stitch_batch_patches(reconstruction, num_imgs)
         original = stitch_batch_patches(original, num_imgs)
 
-    diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size)
+    diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size, fl_smoothing_kernel_size)
     history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
 
     return original.cpu(), reconstruction.cpu(), diff_maps, history
 
 
-def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int):
+def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3):
     with torch.no_grad():
         diff_maps = []
 
@@ -63,7 +63,7 @@ def create_diffmaps(original, reconstruction, extractor, extractor_resolution: i
         reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
 
         if extractor is not None:
-            resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction)
+            resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction, fl_smoothing_size)
             resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
             diff_maps.append(resnet_diffmap)
 

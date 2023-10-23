@@ -44,6 +44,7 @@ class InferenceArgs:
     run_id: str
     batch_size: int
     extractor_path: str
+    feature_smoothing_kernel: int
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -89,6 +90,8 @@ def parse_args() -> InferenceArgs:
                         help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
     parser.add_argument('--batch_size', type=int, default=2,
                         help='Number of images to process per batch')
+    parser.add_argument('-fsk', '--feature_smoothing_kernel', type=int, default=3,
+                        help='Size of the kernel to be used for smoothing the extracted features. Set to 1 for no smoothing.')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -164,13 +167,13 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs,
                        patch_imgs, plt_imgs, img_dir, pl_counter=None, fl_counter=None):
     originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference, extractor, imgs, eta,
                                                                      num_inference_steps, start_at_timestep, patch_imgs,
-                                                                     noise_kind)
+                                                                     noise_kind, args.feature_smoothing_kernel)
     # analysis of thresholds:
     if pl_counter is not None and fl_counter is not None:
         anomalies.count_values(diffmaps[0], factor=1000, counter=pl_counter)
         anomalies.count_values(diffmaps[1], factor=1000, counter=fl_counter)
 
-    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [0.0760, 0.2140], diffmap_blur)  # TODO extract thresholds
+    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [0.0760, 0.6400], diffmap_blur)  # TODO extract thresholds
     overlays = add_batch_overlay(originals, anomaly_maps)
 
     if eval_scores is not None:
@@ -182,7 +185,7 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs,
 
         plot_single_channel_imgs([gts[idx].cpu(), diffmaps[0][idx].cpu(), diffmaps[1][idx].cpu(), anomaly_maps[idx].cpu()],
                                  ["ground truth", "diff-map-pl", "diff-map-fl", "anomaly-map"],
-                                 cmaps=['gray', 'viridis', 'viridis', 'gray'], vmaxs=[1, 0.0760, 0.2140, 1],
+                                 cmaps=['gray', 'viridis', 'viridis', 'gray'], vmaxs=[1, 0.0760, 0.6400, 1],
                                  save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
         plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
                       save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 
-def create_fl_diffmap(extractor: torch.nn.Module, batch1: torch.Tensor, batch2: torch.Tensor):
+def create_fl_diffmap(extractor: torch.nn.Module, batch1: torch.Tensor, batch2: torch.Tensor, smoothing_kernel_size=3):
     """
     Extract and compare features to a single feature-level difference map, based on the given extractor.
 
@@ -11,6 +11,7 @@ def create_fl_diffmap(extractor: torch.nn.Module, batch1: torch.Tensor, batch2: 
     layer name to layer result
     :param batch1: compare this batch of images against batch2
     :param batch2: compare this batch of images against batch1
+    :param smoothing_kernel_size: Size of the kernel to use for smoothing the extracted features before creating the diffmap.
     :return Feature-Level Difference Map
     """
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -27,7 +28,7 @@ def create_fl_diffmap(extractor: torch.nn.Module, batch1: torch.Tensor, batch2: 
     diff_map = torch.zeros((batch1.shape[0], 1, *batch1.shape[2:])).to(batch1.device)
 
     for f1, f2 in zip(features1, features2):
-        d_map = 1 - F.cosine_similarity(_mean_conv(f1), _mean_conv(f2))
+        d_map = 1 - F.cosine_similarity(_mean_conv(f1, smoothing_kernel_size), _mean_conv(f2, smoothing_kernel_size))
         d_map = torch.unsqueeze(d_map, dim=1)
         d_map = F.interpolate(d_map, size=batch1.shape[-1], mode='bilinear', align_corners=True)
         diff_map += d_map
