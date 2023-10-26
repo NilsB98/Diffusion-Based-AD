@@ -7,7 +7,9 @@ from torch import Tensor
 from torch.nn import Module
 
 
-def diff_maps_to_anomaly_map(diff_maps: List[Tensor], thresholds: List[float], transform: Module = None) -> Tensor:
+def diff_maps_to_anomaly_map(diff_maps: Dict[str, Tensor], thresholds: List[float], transform: Module = None) -> Tensor:
+
+    diff_maps = list(diff_maps.values())
 
     # apply transform
     if transform is not None:

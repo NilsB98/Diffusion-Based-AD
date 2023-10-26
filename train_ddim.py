@@ -28,8 +28,8 @@ class TrainArgs:
     run_name: str
     mvtec_item: str
     flip: bool
-    rotate: bool
-    color_jitter: bool
+    rotate: float
+    color_jitter: float
     resolution: int
     epochs: int
     save_n_epochs: int
@@ -47,18 +47,21 @@ class TrainArgs:
     plt_imgs: bool
     calc_val_loss: bool
     extractor_path: str
+    checkpoint_name: str
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
                         help='directory path to store the checkpoints')
+    parser.add_argument('--checkpoint_name', type=str, default="final.pt",
+                        help='Name of the final checkpoint to be stored.')
+    parser.add_argument('--run_name', type=str, required=True,
+                        help='Name of the run and corresponding log and checkpoint directory that will be created.')
     parser.add_argument('--log_dir', type=str, default="logs",
                         help='directory path to store the checkpoints')
     parser.add_argument('--img_dir', type=str, default=None,
                         help='directory path to store the generated images in. Will create a new sub-directory.')
-    parser.add_argument('--run_name', type=str, required=True,
-                        help='name of the run and corresponding checkpoints/logs that are created')
     parser.add_argument('--mvtec_item', type=str, required=True,
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
@@ -104,7 +107,7 @@ def parse_args() -> TrainArgs:
     return TrainArgs(**vars(parser.parse_args()))
 
 
-def transform_imgs_test(imgs):
+def transform_imgs_test(imgs, args):
     augmentations = transforms.Compose(
         [
             transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
@@ -116,7 +119,7 @@ def transform_imgs_test(imgs):
     return [augmentations(image.convert("RGB")) for image in imgs]
 
 
-def transform_imgs_train(imgs):
+def transform_imgs_train(imgs, args):
     augmentations = transforms.Compose(
         [
             transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
@@ -134,10 +137,10 @@ def transform_imgs_train(imgs):
 def main(args: TrainArgs):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
-                              transform_imgs_train)
+                              lambda x: transform_imgs_train(x, args))
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
-                             transform_imgs_test)
+                             lambda x: transform_imgs_test(x, args))
     test_loader = DataLoader(test_data, batch_size=2, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
@@ -184,23 +187,21 @@ def main(args: TrainArgs):
     )
     loss_fn = torch.nn.MSELoss()
 
-    extractor = feature_extraction.ResNetFE(args.extractor_path)
-    extractor.eval()
-    extractor.to(args.device)
+    # extractor = feature_extraction.ResNetFE(args.extractor_path)
+    # extractor.eval()
+    # extractor.to(args.device)
 
     # additional info/util
-    timestamp = str(time.time())[:11]
-    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}_{timestamp}')
+    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}')
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
-    run_id = f"{args.run_name}_{timestamp}"
     print(diffusers.utils.logging.is_progress_bar_enabled())
     diffusers.utils.logging.disable_progress_bar()
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    print(f"run_id: {run_id}")
-    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "train_arg_config")
-    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
+    print(f"run name: {args.run_name}")
+    save_args(args, f"{args.checkpoint_dir}/{args.run_name}", "train_arg_config")
+    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}", "model_config")
 
     for epoch in range(args.epochs):
         model.train()
@@ -231,9 +232,9 @@ def main(args: TrainArgs):
 
             if epoch % 100 == 0:
                 # runs it only for the last batch
-                inference_ddim.run_inference_step(extractor, diffmap_blur, scores, gts, _btc_num, _batch, model,
+                inference_ddim.run_inference_step(None, diffmap_blur, scores, gts, _btc_num, _batch, model,
                                                   args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 15,
-                                                  150, args.crop, args.plt_imgs, os.path.join(args.img_dir, run_id))
+                                                  150, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name))
 
             for key in scores:
                 scores[key] /= len(test_loader)
@@ -243,7 +244,7 @@ def main(args: TrainArgs):
             progress_bar.close()
 
             if epoch % args.save_n_epochs == 0 and epoch > 0:
-                torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{epoch}.pt")
+                torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/epoch_{epoch}.pt")
 
         writer.add_scalar('Loss/train', running_loss_train, epoch)
         writer.add_scalar('Loss/test', running_loss_test, epoch)
@@ -255,7 +256,7 @@ def main(args: TrainArgs):
     writer.flush()
     writer.close()
 
-    torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{args.epochs}.pt")
+    torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/{args.checkpoint_name}")
 
 
 if __name__ == '__main__':

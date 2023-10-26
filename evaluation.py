@@ -16,7 +16,7 @@ from utils.anomalies import calc_threshold
 
 def eval_diffmap_threshold(args: InferenceArgs):
     # train loop
-    print("**** starting eval *****")
+    print("**** starting threshold eval *****")
     config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
     model_config = json.loads(config_file.read())
     train_arg_file = open(f"{args.checkpoint_dir}/train_arg_config.json", "r")
@@ -36,7 +36,7 @@ def eval_diffmap_threshold(args: InferenceArgs):
         return [augmentations(image.convert("RGB")) for image in imgs]
 
     # data loader
-    test_data = MVTecDataset(args.dataset_path, True, args.mvtec_item, args.mvtec_item_states,
+    test_data = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
                              transform_images)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=args.shuffle)
 
@@ -68,13 +68,15 @@ def eval_diffmap_threshold(args: InferenceArgs):
         for i, (imgs, states) in enumerate(test_loader):
             run_inference_step(extractor, diffmap_blur, None, [], i, imgs, model, noise_kind, noise_scheduler_inference,
                                states, None, args.eta, args.num_inference_steps, args.start_at_timestep,
-                               args.patch_imgs, args.plt_imgs, args.img_dir, pl_counter, fl_counter)
+                               args.patch_imgs, args.plt_imgs, args.img_dir, pl_counter, fl_counter, args.feature_smoothing_kernel, args.pl_threshold, args.fl_threshold)
 
         threshold_pl = calc_threshold(dict(pl_counter), .999, 1000)
         threshold_fl = calc_threshold(dict(fl_counter), .999, 1000)
 
     print(f"{threshold_pl=:.4f}")
     print(f"{threshold_fl=:.4f}")
+
+    return {'threshold_pl': threshold_pl, 'threshold_fl': threshold_fl}
 
 
 if __name__ == '__main__':

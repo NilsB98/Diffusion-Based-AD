@@ -18,15 +18,10 @@ from utils.visualize import generate_samples
 @dataclass
 class TrainArgs:
     checkpoint_dir: str
-    log_dir: str
-    run_name: str
-    mvtec_item: str
+    item: str
     flip: bool
-    rotate: bool
-    color_jitter: bool
     resolution: int
     epochs: int
-    save_n_epochs: int
     dataset_path: str
     train_steps: int
     beta_schedule: str
@@ -36,24 +31,18 @@ class TrainArgs:
     batch_size: int
     noise_kind: str
     crop: bool
-    plt_imgs: bool
-    img_dir: str
-    calc_val_loss: bool
     checkpoint_name: str
     save_to: str
     start_at_timestep: int
     steps_to_regenerate: int
+    use_diffusion_model: bool
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
                         help='directory path to store the checkpoints')
-    parser.add_argument('--log_dir', type=str, default="logs",
-                        help='directory path to store logs')
-    parser.add_argument('--run_name', type=str,
-                        help='name of the run and corresponding checkpoints/logs that are created')
-    parser.add_argument('--mvtec_item', type=str, required=True,
+    parser.add_argument('--item', type=str, required=True,
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
                         help='name of the item within the MVTec Dataset to train on')
@@ -67,12 +56,6 @@ def parse_args() -> TrainArgs:
                         help='Number of timesteps to generate during the DDIM process')
     parser.add_argument('--flip', action='store_true',
                         help='whether to augment training data with a flip')
-    parser.add_argument('--rotate', type=float, default=0,
-                        help='degree of rotation to augment training data with')
-    parser.add_argument('--color_jitter', type=float, default=0,
-                        help='amount of color jitter to augment training data with')
-    parser.add_argument('--save_n_epochs', type=int, default=50,
-                        help='write a checkpoint every n-th epoch')
     parser.add_argument('--train_steps', type=int, default=1000,
                         help='number of steps for the full diffusion process')
     parser.add_argument('--beta_schedule', type=str, default="linear",
@@ -82,13 +65,13 @@ def parse_args() -> TrainArgs:
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
     parser.add_argument('--checkpoint_name', type=str, default=None,
-                        help='Checkpoint to load diffusion model from. If None is given the feature extractor will be trained in an AE-Fashion, s.t. the input image should match the output image. If a diffusion model is given the model is trained to reduce the distance between an input image and the diffusion-model output of the image.')
+                        help='Checkpoint to load diffusion model from.')
     parser.add_argument('--save_to', type=str, required=True,
                         help='Full path and name to where the trained extractor should be saved (including .pt ending)')
-    parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
-                        help='Influence of the original sample during inference (doesnt affect training)')
     parser.add_argument('--eta', type=float, default=0,
                         help='Stochasticity parameter of DDIM, with eta=1 being DDPM and eta=0 meaning no randomness. Only used during inference, not training.')
+    parser.add_argument('--reconstruction_weight', type=float, default=.1,
+                        help='Influence of the original sample during diffusion')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size during training')
     parser.add_argument('--noise_kind', type=str, default="gaussian",
@@ -96,20 +79,15 @@ def parse_args() -> TrainArgs:
                         help='Kind of noise to use for the noising steps.')
     parser.add_argument('--crop', action='store_true',
                         help='If set: the image will be cropped to the resolution instead of resized.')
-    parser.add_argument('--plt_imgs', action='store_true',
-                        help='If set: plot the images with matplotlib')
-    parser.add_argument('--calc_val_loss', action='store_true',
-                        help='If set: calculate not only the train loss, but also the validation loss during each epoch')
-    parser.add_argument('--img_dir', type=str, default=None,
-                        help='Directory to store the images created during the run. A new directory with the run-id will be created in this directory. If not used images wont be stored except for tensorboard.')
+    parser.add_argument('--use_diffusion_model', action='store_true',
+                        help='If not set the feature extractor will be trained in an AE-Fashion, s.t. the input image should match the output image. If set and a diffusion model is given the model is trained to reduce the distance between an input image and the diffusion-model output of the image.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
 
-if __name__ == '__main__':
-    args: TrainArgs = parse_args()
+def main(args: TrainArgs):
+    global model, noise_kind, noise_scheduler_inference
     print(f"**** training feature extractor ****")
-
 
     def transform_imgs(imgs):
         augmentations = transforms.Compose([
@@ -123,10 +101,7 @@ if __name__ == '__main__':
 
         return [augmentations(image.convert("RGB")) for image in imgs]
 
-
-    use_diffusion_model = args.checkpoint_name is not None
-
-    if use_diffusion_model:
+    if args.use_diffusion_model:
         config_file = open(f"{args.checkpoint_dir}/model_config.json", "r")
         model_config = json.loads(config_file.read())
         train_arg_file = open(f"{args.checkpoint_dir}/train_arg_config.json", "r")
@@ -146,30 +121,29 @@ if __name__ == '__main__':
                                                   reconstruction_weight=args.reconstruction_weight,
                                                   noise_type=noise_kind)
 
-
     def denoise_imgs(batch: torch.Tensor) -> torch.Tensor:
         _, imgs, _, _ = generate_samples(model, noise_scheduler_inference, None, batch, args.eta,
                                          args.steps_to_regenerate, args.start_at_timestep, args.crop, noise_kind)
 
         return imgs
 
-
-    data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
+    data_train = MVTecDataset(args.dataset_path, True, args.item, ["good"],
                               transform_imgs)
-
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
-    data_test = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["good"],
+    data_test = MVTecDataset(args.dataset_path, False, args.item, ["good"],
                              transform_imgs)
-
     test_loader = DataLoader(data_test, batch_size=args.batch_size, shuffle=True)
-
     extractor = ResNetFE()
     extractor.train_res = args.resolution
     ae = Autoencoder(extractor)
     ae.init_decoder((3, args.resolution, args.resolution))
-    trainer = AETrainer(ae, train_loader, test_loader) if not use_diffusion_model else DBTrainer(ae, denoise_imgs,
-                                                                                                 train_loader,
-                                                                                                 test_loader)
+    trainer = AETrainer(ae, train_loader, test_loader) if not args.use_diffusion_model else DBTrainer(ae, denoise_imgs,
+                                                                                                    train_loader,
+                                                                                                    test_loader)
     trainer.train(args.epochs)
-
     torch.save(extractor.state_dict(), f"{args.save_to}")
+
+
+if __name__ == '__main__':
+    args: TrainArgs = parse_args()
+    main(args)

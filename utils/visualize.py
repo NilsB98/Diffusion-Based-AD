@@ -50,12 +50,12 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
 
 def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3):
     with torch.no_grad():
-        diff_maps = []
+        diff_maps = {}
 
         # pixel-level
         diff_map = (original - reconstruction) ** 2
         pl_diff_map = torch.amax(diff_map, (1))[:, None, :, :]
-        diff_maps.append(pl_diff_map)
+        diff_maps['diffmap_pl'] = pl_diff_map
 
         # feature-level
         num_imgs = len(original)
@@ -65,7 +65,7 @@ def create_diffmaps(original, reconstruction, extractor, extractor_resolution: i
         if extractor is not None:
             resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction, fl_smoothing_size)
             resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
-            diff_maps.append(resnet_diffmap)
+            diff_maps['diffmap_fl'] = resnet_diffmap
 
         return diff_maps
 
