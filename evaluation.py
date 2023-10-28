@@ -70,8 +70,8 @@ def eval_diffmap_threshold(args: InferenceArgs):
                                states, None, args.eta, args.num_inference_steps, args.start_at_timestep,
                                args.patch_imgs, args.plt_imgs, args.img_dir, pl_counter, fl_counter, args.feature_smoothing_kernel, args.pl_threshold, args.fl_threshold)
 
-        threshold_pl = calc_threshold(dict(pl_counter), .999, 1000)
-        threshold_fl = calc_threshold(dict(fl_counter), .999, 1000)
+        threshold_pl = calc_threshold(dict(pl_counter), .999, 5000)
+        threshold_fl = calc_threshold(dict(fl_counter), .999, 5000)
 
     print(f"{threshold_pl=:.4f}")
     print(f"{threshold_fl=:.4f}")

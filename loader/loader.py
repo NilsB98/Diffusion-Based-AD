@@ -35,6 +35,8 @@ class MVTecDataset(Dataset):
         objective_path = root_path
         gt_path = None
 
+        assert root_path.exists(), f"'{root_path}' doesn't exists. Please make sure that @path='{path}' points to the dataset directory and @piece='{piece}' is the directory of the object you want to use."
+
         if train:
             objective_path /= "train"
         else:

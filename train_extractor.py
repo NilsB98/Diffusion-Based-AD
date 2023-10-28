@@ -133,7 +133,6 @@ def main(args: TrainArgs):
                              transform_imgs)
     test_loader = DataLoader(data_test, batch_size=args.batch_size, shuffle=True)
     extractor = ResNetFE()
-    extractor.train_res = args.resolution
     ae = Autoencoder(extractor)
     ae.init_decoder((3, args.resolution, args.resolution))
     trainer = AETrainer(ae, train_loader, test_loader) if not args.use_diffusion_model else DBTrainer(ae, denoise_imgs,

@@ -174,8 +174,8 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs,
                                                                      noise_kind, smoothing_kernel_size)
     # analysis of thresholds:
     if pl_counter is not None and fl_counter is not None:
-        anomalies.count_values(diffmaps['diffmap_pl'], factor=1000, counter=pl_counter)
-        anomalies.count_values(diffmaps['diffmap_fl'], factor=1000, counter=fl_counter)
+        anomalies.count_values(diffmaps['diffmap_pl'], factor=5000, counter=pl_counter)
+        anomalies.count_values(diffmaps['diffmap_fl'], factor=5000, counter=fl_counter)
 
     anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [pl_threshold, fl_threshold], diffmap_blur)
     overlays = add_batch_overlay(originals, anomaly_maps)
