@@ -86,7 +86,6 @@ def parse_args() -> TrainArgs:
 
 
 def main(args: TrainArgs):
-    global model, noise_kind, noise_scheduler_inference
     print(f"**** training feature extractor ****")
 
     def transform_imgs(imgs):

@@ -93,7 +93,7 @@ def parse_args() -> InferenceArgs:
                         help='Size of the kernel to be used for smoothing the extracted features. Set to 1 for no smoothing.')
     parser.add_argument('--pl_threshold', type=float, default=0.029,
                         help='Pixel level threshold for difference-map')
-    parser.add_argument('--fl_threshold', type=float, default=0.5,
+    parser.add_argument('--fl_threshold', type=float, default=0.33,
                         help='Feature level threshold for difference-map')
 
     return InferenceArgs(**vars(parser.parse_args()))
