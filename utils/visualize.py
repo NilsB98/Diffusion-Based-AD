@@ -1,3 +1,5 @@
+from typing import TypedDict
+
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -7,6 +9,7 @@ from PIL import Image
 
 import feature_extraction
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
+from utils.anomalies import DiffMaps
 
 
 def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
@@ -48,9 +51,9 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
     return original.cpu(), reconstruction.cpu(), diff_maps, history
 
 
-def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3):
+def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3) -> DiffMaps:
     with torch.no_grad():
-        diff_maps = {}
+        diff_maps:DiffMaps = {}
 
         # pixel-level
         diff_map = (original - reconstruction) ** 2

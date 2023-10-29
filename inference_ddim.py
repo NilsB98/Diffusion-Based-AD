@@ -46,6 +46,8 @@ class InferenceArgs:
     feature_smoothing_kernel: int
     fl_threshold: float
     pl_threshold: float
+    fl_contrib:float
+    pl_contrib:float
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
@@ -95,6 +97,10 @@ def parse_args() -> InferenceArgs:
                         help='Pixel level threshold for difference-map')
     parser.add_argument('--fl_threshold', type=float, default=0.33,
                         help='Feature level threshold for difference-map')
+    parser.add_argument('--fl_contrib', type=float, default=0.7,
+                        help='Contribution of the feature-level diffMap to the combined diffMap')
+    parser.add_argument('--pl_contrib', type=float, default=0.7,
+                        help='Contribution of the pixel-level diffMap to the combined diffMap')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -168,7 +174,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
 def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind,
                        noise_scheduler_inference, states, writer, eta, num_inference_steps, start_at_timestep,
-                       patch_imgs, plt_imgs, img_dir, pl_counter=None, fl_counter=None, smoothing_kernel_size=3, pl_threshold=1., fl_threshold=1.):
+                       patch_imgs, plt_imgs, img_dir, pl_counter=None, fl_counter=None, smoothing_kernel_size=3, pl_threshold=1., fl_threshold=1., fl_contrib=.7, pl_contrib=.7):
     originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference, extractor, imgs, eta,
                                                                      num_inference_steps, start_at_timestep, patch_imgs,
                                                                      noise_kind, smoothing_kernel_size)
@@ -177,7 +183,8 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs,
         anomalies.count_values(diffmaps['diffmap_pl'], factor=5000, counter=pl_counter)
         anomalies.count_values(diffmaps['diffmap_fl'], factor=5000, counter=fl_counter)
 
-    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, [pl_threshold, fl_threshold], diffmap_blur)
+    diffmaps = anomalies.normalize_diffmaps(diffmaps, {'threshold_pl': pl_threshold, 'threshold_fl': fl_threshold})
+    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, {'diffmap_fl': fl_contrib, 'diffmap_pl': pl_contrib}, diffmap_blur)
     overlays = add_batch_overlay(originals, anomaly_maps)
 
     if eval_scores is not None:
@@ -187,28 +194,24 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs,
         if not os.path.exists(f"{img_dir}"):
             os.makedirs(f"{img_dir}")
 
-        # TODO implement arg to control diff-maps
         # iterate over created diffmaps
         single_channel_imgs = [gts[idx].cpu()]
         titles = ["ground truth"]
         c_maps = ['gray']
-        v_maxs = [1]   # TODO remove this by adding normlaization in diffmap calculation already
 
         for map_name, map_value in diffmaps.items():
             single_channel_imgs.append(map_value[idx].cpu())
             titles.append(map_name)
             c_maps.append('viridis')
-            v_maxs.append(pl_threshold if 'pl' in map_name else fl_threshold)
 
         single_channel_imgs.append(anomaly_maps[idx].cpu())
         titles.append("anomaly-map")
         c_maps.append('gray')
-        v_maxs.append(1)
+        v_maxs = [1] * len(titles)
 
-        plot_single_channel_imgs(single_channel_imgs,
-                                 titles,
-                                 cmaps=c_maps, vmaxs=v_maxs,
+        plot_single_channel_imgs(single_channel_imgs, titles, cmaps=c_maps, vmaxs=v_maxs,
                                  save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
+
         plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
                       save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)
 

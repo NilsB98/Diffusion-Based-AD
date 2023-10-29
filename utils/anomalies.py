@@ -1,5 +1,5 @@
 from collections import Counter
-from typing import List, Dict
+from typing import List, Dict, TypedDict
 
 import numpy as np
 import torch
@@ -7,24 +7,44 @@ from torch import Tensor
 from torch.nn import Module
 
 
-def diff_maps_to_anomaly_map(diff_maps: Dict[str, Tensor], thresholds: List[float], transform: Module = None) -> Tensor:
+class DiffMaps(TypedDict):
+    diffmap_pl: torch.Tensor
+    diffmap_fl: torch.Tensor
 
-    diff_maps = list(diff_maps.values())
+def diff_maps_to_anomaly_map(diff_maps: DiffMaps, diff_map_contrib:TypedDict('Influence', {'diffmap_pl': float, 'diffmap_fl': float}), transform: Module = None) -> Tensor:
 
     # apply transform
     if transform is not None:
-        for i in range(len(diff_maps)):
-            diff_maps[i] = transform(diff_maps[i])
+        for name, d_map in diff_maps.items():
+            diff_maps[name] = transform(d_map)
 
     # init aggregation diffmap
-    diff_map = torch.zeros_like(diff_maps[0])
+    diff_map = torch.zeros_like(diff_maps['diffmap_pl'])
 
     # aggregate diffmaps and normalize each by threshold, s.t. the threshold for each one is at 1 and summation makes
     # sense
-    for i in range(len(diff_maps)):
-        diff_map += diff_maps[i] / thresholds[i] * .7
+    for key in diff_maps.keys():
+        diff_map += diff_maps[key] * diff_map_contrib[key]
 
     return torch.where(diff_map >= 1, 1, 0)
+
+
+def normalize_diffmaps(diffmaps: DiffMaps, normalization: TypedDict('DiffMapNormalization', {'threshold_pl': float,
+                                                                                             'threshold_fl': float})) -> DiffMaps:
+    """
+    Normalize the given diffmaps by some factors.
+
+    :param diffmaps: Diffmaps to normalize
+    :param normalization: normalization factor
+    :return: normalized diffmaps
+    """
+
+    if "diffmap_fl" in diffmaps and "threshold_fl" in normalization:
+        diffmaps["diffmap_fl"] /= normalization["threshold_fl"]
+    if "diffmap_pl" in diffmaps and "threshold_pl" in normalization:
+        diffmaps["diffmap_pl"] /= normalization["threshold_pl"]
+
+    return diffmaps
 
 
 def count_values(tensor: Tensor, factor=1, counter: Counter=None) -> Dict[int, int]:
