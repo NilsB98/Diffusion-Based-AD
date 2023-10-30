@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import torch
 
@@ -29,8 +30,7 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
         eval_scores.update(scores_batch(gts, anomaly_maps))
 
     for idx in range(len(gts)):
-        if not os.path.exists(f"{img_dir}"):
-            os.makedirs(f"{img_dir}")
+        Path(img_dir).mkdir(parents=True, exist_ok=True)
 
         # iterate over created diffmaps
         single_channel_imgs = [gts[idx].cpu()]

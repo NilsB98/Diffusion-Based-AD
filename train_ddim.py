@@ -234,7 +234,7 @@ def main(args: TrainArgs):
                 if epoch % 100 == 0:
                     pipe.inference.run_inference_step(None, diffmap_blur, scores, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
                                                       args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
-                                                      250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name))
+                                                      250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))
 
             for key in scores:
                 scores[key] /= len(test_loader)

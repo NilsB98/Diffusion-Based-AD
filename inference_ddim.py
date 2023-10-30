@@ -1,6 +1,7 @@
 # imports
 import argparse
 import json
+import os
 from collections import Counter
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ class InferenceArgs:
     mvtec_item_states: list
     checkpoint_dir: str
     checkpoint_name: str
+    run_name: str
     log_dir: str
     train_steps: int
     beta_schedule: str
@@ -48,13 +50,15 @@ class InferenceArgs:
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, required=True,
-                        help='directory path to store the checkpoints')
+                        help='directory path to the stored checkpoint and model config.')
     parser.add_argument('--log_dir', type=str, default="logs",
                         help='directory path to store logs')
     parser.add_argument('--img_dir', type=str, default="generated_imgs",
                         help='directory path to store generated imgs')
-    parser.add_argument('--checkpoint_name', type=str, required=True,
+    parser.add_argument('--run_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
+    parser.add_argument('--checkpoint_name', type=str, required=True,
+                        help='name of the checkpoint in the checkpoint_dir to load')
     parser.add_argument('--mvtec_item', type=str, required=True,
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
@@ -141,7 +145,10 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     extractor.eval()
     extractor.to(args.device)
 
+    # gaussian kernel to smoothen the diff-map with
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
+    # directory to store the generated images in
+    img_results_dir = os.path.join(args.img_dir, args.run_name, "inf_results")
 
     with torch.no_grad():
         # validate and generate images
@@ -154,7 +161,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         for i, (imgs, states, gts) in enumerate(test_loader):
             run_inference_step(extractor, diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
                                noise_scheduler_inference, states, writer, args.eta, args.num_inference_steps,
-                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, args.img_dir,
+                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, img_results_dir,
                                smoothing_kernel_size=args.feature_smoothing_kernel, pl_threshold=args.pl_threshold, fl_threshold=args.fl_threshold)
 
         normalize_pxl_scores(len(test_loader), eval_scores)

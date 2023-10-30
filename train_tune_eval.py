@@ -209,7 +209,7 @@ def parse_args():
 
     extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model)
 
-    evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold, args.fl_contrib, args.pl_contrib)
+    evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.run_id, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold, args.fl_contrib, args.pl_contrib)
 
     return diffusionTrainArgs, extractorTrainArgs, evalArgs, args
 
