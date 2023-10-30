@@ -6,13 +6,18 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
+import feature_extraction
+from utils.visualize import split_batch_into_patch, stitch_batch_patches
+
 
 class DiffMaps(TypedDict):
     diffmap_pl: torch.Tensor
     diffmap_fl: torch.Tensor
 
-def diff_maps_to_anomaly_map(diff_maps: DiffMaps, diff_map_contrib:TypedDict('Influence', {'diffmap_pl': float, 'diffmap_fl': float}), transform: Module = None) -> Tensor:
 
+def diff_maps_to_anomaly_map(diff_maps: DiffMaps,
+                             diff_map_contrib: TypedDict('Influence', {'diffmap_pl': float, 'diffmap_fl': float}),
+                             transform: Module = None) -> Tensor:
     # apply transform
     if transform is not None:
         for name, d_map in diff_maps.items():
@@ -47,7 +52,7 @@ def normalize_diffmaps(diffmaps: DiffMaps, normalization: TypedDict('DiffMapNorm
     return diffmaps
 
 
-def count_values(tensor: Tensor, factor=1, counter: Counter=None) -> Dict[int, int]:
+def count_values(tensor: Tensor, factor=1, counter: Counter = None) -> Dict[int, int]:
     tensor *= factor
     counts = torch.bincount(tensor.to(torch.int).reshape(-1))
 
@@ -61,6 +66,8 @@ def count_values(tensor: Tensor, factor=1, counter: Counter=None) -> Dict[int, i
 
 def calc_threshold(bin_dict: Dict[int, int], quantile: float, factor=1) -> float:
     """
+    Calculate the threshold for a diffMap at which a pixel is anomalous.
+
     Given a counter of occurrences per value (e.g. number pf pixels per pixel value), calculate a threshold
     at which the quantile is reached.
     Since binning doesn't make sense with float values this method is best used by first scaling potential float values
@@ -89,5 +96,36 @@ def calc_threshold(bin_dict: Dict[int, int], quantile: float, factor=1) -> float
             return idx / factor
 
 
-if __name__ == '__main__':
-    count_values(torch.rand((8, 3, 256, 256)), factor=1000, counter=Counter())
+def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3) -> DiffMaps:
+    """
+    Create the diffMaps, showing the difference between the original and reconstructed image.
+    I.e. the pixel-level diffmap and the feature-level diffMap based on a feature extractor.
+
+    :param original: The original samples
+    :param reconstruction: The reconstructede samples
+    :param extractor: The extractor model, to extract features from the samples.
+    :param extractor_resolution: The resolution/input size on which the extractor was trained on. (Should match the input size of the diffusion-model)
+    :param fl_smoothing_size: Kernel used to smoothen the features found by the extractor. No smoothing if set to 1.
+    :return: Dict with the diffMaps.
+    """
+
+    with torch.no_grad():
+        diff_maps: DiffMaps = {}
+
+        # pixel-level
+        diff_map = (original - reconstruction) ** 2
+        pl_diff_map = torch.amax(diff_map, (1))[:, None, :, :]
+        diff_maps['diffmap_pl'] = pl_diff_map
+
+        # feature-level
+        num_imgs = len(original)
+        original = split_batch_into_patch(original, extractor_resolution)
+        reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
+
+        if extractor is not None:
+            resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction,
+                                                                        fl_smoothing_size)
+            resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
+            diff_maps['diffmap_fl'] = resnet_diffmap
+
+        return diff_maps

@@ -1,7 +1,6 @@
 # imports
 import argparse
 import json
-import os
 from collections import Counter
 from dataclasses import dataclass
 
@@ -12,14 +11,11 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
 import feature_extraction
-# import utils.anomalies
-from utils import anomalies
+from pipe.inference import run_inference_step
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.metrics import scores_batch, aggregate_img_scores, normalize_pxl_scores
-from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
-    add_batch_overlay
+from utils.metrics import aggregate_img_scores, normalize_pxl_scores
 
 
 @dataclass
@@ -170,59 +166,6 @@ def main(args: InferenceArgs, writer: SummaryWriter):
                             'input_size': model_config["sample_size"], 'patching': args.patch_imgs}, dict(eval_scores),
                            run_name=f'hp')
         print(eval_scores)
-
-
-def run_inference_step(extractor, diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind,
-                       noise_scheduler_inference, states, writer, eta, num_inference_steps, start_at_timestep,
-                       patch_imgs, plt_imgs, img_dir, pl_counter=None, fl_counter=None, smoothing_kernel_size=3, pl_threshold=1., fl_threshold=1., fl_contrib=.7, pl_contrib=.7):
-    originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference, extractor, imgs, eta,
-                                                                     num_inference_steps, start_at_timestep, patch_imgs,
-                                                                     noise_kind, smoothing_kernel_size)
-    # analysis of thresholds:
-    if pl_counter is not None and fl_counter is not None:
-        anomalies.count_values(diffmaps['diffmap_pl'], factor=5000, counter=pl_counter)
-        anomalies.count_values(diffmaps['diffmap_fl'], factor=5000, counter=fl_counter)
-
-    diffmaps = anomalies.normalize_diffmaps(diffmaps, {'threshold_pl': pl_threshold, 'threshold_fl': fl_threshold})
-    anomaly_maps = anomalies.diff_maps_to_anomaly_map(diffmaps, {'diffmap_fl': fl_contrib, 'diffmap_pl': pl_contrib}, diffmap_blur)
-    overlays = add_batch_overlay(originals, anomaly_maps)
-
-    if eval_scores is not None:
-        eval_scores.update(scores_batch(gts, anomaly_maps))
-
-    for idx in range(len(gts)):
-        if not os.path.exists(f"{img_dir}"):
-            os.makedirs(f"{img_dir}")
-
-        # iterate over created diffmaps
-        single_channel_imgs = [gts[idx].cpu()]
-        titles = ["ground truth"]
-        c_maps = ['gray']
-
-        for map_name, map_value in diffmaps.items():
-            single_channel_imgs.append(map_value[idx].cpu())
-            titles.append(map_name)
-            c_maps.append('viridis')
-
-        single_channel_imgs.append(anomaly_maps[idx].cpu())
-        titles.append("anomaly-map")
-        c_maps.append('gray')
-        v_maxs = [1] * len(titles)
-
-        plot_single_channel_imgs(single_channel_imgs, titles, cmaps=c_maps, vmaxs=v_maxs,
-                                 save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
-
-        plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
-                      save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)
-
-        if writer is not None:
-            for t, im in zip(history["timesteps"], history["images"]):
-                writer.add_images(f"{btc_idx}_{states[0]}_process", im[idx].unsqueeze(0), t)
-
-            # TODO add logic for diffmap_fl
-            writer.add_images(f"{btc_idx}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
-                [originals[idx].cpu(), reconstructions[idx].cpu(), gray_to_rgb(diffmaps['diffmap_pl'])[0].cpu(), gray_to_rgb(anomaly_maps[idx].cpu())[0],
-                 gray_to_rgb(gts[idx].cpu())[0]]))
 
 
 if __name__ == '__main__':

@@ -12,7 +12,7 @@ from feature_extraction.autoencoder import Autoencoder, AETrainer, DBTrainer
 from feature_extraction.extractor import ResNetFE
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
-from utils.visualize import generate_samples
+from pipe.inference import generate_samples
 
 
 @dataclass

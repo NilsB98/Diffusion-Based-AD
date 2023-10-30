@@ -71,9 +71,8 @@ class MetaArgs:
     plt_imgs: bool
     run_id: str
 
-    # TODO implement
-    pl_diffmap_influence: float
-    fl_diffmap_influence: float
+    fl_contrib: float
+    pl_contrib: float
 
 
 def main():
@@ -198,9 +197,9 @@ def parse_args():
                         help='Id of the run. The created checkpoint- and log directory will be named like this.')
 
     # diffmap config
-    parser.add_argument('--pl_diffmap_influence', type=float, default=0.7,
+    parser.add_argument('--pl_contrib', type=float, default=0.7,
                         help='Contribution of the pixel-level diffmap to the combined diffmap')
-    parser.add_argument('--fl_diffmap_influence', type=float, default=0.7,
+    parser.add_argument('--fl_contrib', type=float, default=0.7,
                         help='Contribution of the feature-level diffmap to the combined diffmap')
 
     args = MetaArgs(**vars(parser.parse_args()))
@@ -210,7 +209,7 @@ def parse_args():
 
     extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model)
 
-    evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold)
+    evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold, args.fl_contrib, args.pl_contrib)
 
     return diffusionTrainArgs, extractorTrainArgs, evalArgs, args
 

@@ -1,76 +1,9 @@
-from typing import TypedDict
-
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from torchvision import transforms
 import torchvision.transforms.functional as F
 from PIL import Image
-
-import feature_extraction
-from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
-from utils.anomalies import DiffMaps
-
-
-def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
-                     patch_imgs=False, noise_kind='gaussian', fl_smoothing_kernel_size=3):
-    num_imgs = len(original_images)
-    if patch_imgs:
-        original_images = split_batch_into_patch(original_images, model.sample_size)
-
-    pipeline = DDIMReconstructionPipeline(
-        unet=model,
-        scheduler=noise_scheduler,
-        noise_kind=noise_kind
-    )
-
-    original_images = original_images.to(model.device)
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    # run pipeline in inference (sample random noise and denoise)
-    pipe_output = pipeline(
-        batch_size=len(original_images),
-        generator=generator,
-        num_inference_steps=steps_to_regenerate,
-        original_images=original_images,
-        eta=eta,
-        start_at_timestep=start_at_timestep,
-        output_type="torch",
-    )
-    reconstruction = pipe_output.images
-    history = pipe_output.history
-
-    original = unnormalize_original_img(original_images)
-
-    if patch_imgs:
-        reconstruction = stitch_batch_patches(reconstruction, num_imgs)
-        original = stitch_batch_patches(original, num_imgs)
-
-    diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size, fl_smoothing_kernel_size)
-    history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
-
-    return original.cpu(), reconstruction.cpu(), diff_maps, history
-
-
-def create_diffmaps(original, reconstruction, extractor, extractor_resolution: int, fl_smoothing_size=3) -> DiffMaps:
-    with torch.no_grad():
-        diff_maps:DiffMaps = {}
-
-        # pixel-level
-        diff_map = (original - reconstruction) ** 2
-        pl_diff_map = torch.amax(diff_map, (1))[:, None, :, :]
-        diff_maps['diffmap_pl'] = pl_diff_map
-
-        # feature-level
-        num_imgs = len(original)
-        original = split_batch_into_patch(original, extractor_resolution)
-        reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
-
-        if extractor is not None:
-            resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction, fl_smoothing_size)
-            resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
-            diff_maps['diffmap_fl'] = resnet_diffmap
-
-        return diff_maps
 
 
 def plot_single_channel_imgs(imgs, titles, cmaps=None, vmaxs=None, save_to=None, show_img=False):

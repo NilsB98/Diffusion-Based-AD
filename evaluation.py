@@ -8,10 +8,11 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 import feature_extraction
-from inference_ddim import InferenceArgs, run_inference_step, parse_args
+from inference_ddim import InferenceArgs, parse_args
+from pipe.inference import run_inference_step
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
-from utils.anomalies import calc_threshold
+from utils.diffmap import calc_threshold
 
 
 def eval_diffmap_threshold(args: InferenceArgs):

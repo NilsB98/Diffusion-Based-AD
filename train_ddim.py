@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 import feature_extraction
 import inference_ddim
+import pipe.inference
 from loader.loader import MVTecDataset
 from pipe.train import train_step
 from pipe.validate import validate_step
@@ -141,7 +142,7 @@ def main(args: TrainArgs):
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
                              lambda x: transform_imgs_test(x, args))
-    test_loader = DataLoader(test_data, batch_size=2, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
     channel_multiplier = {
@@ -223,18 +224,17 @@ def main(args: TrainArgs):
         with torch.no_grad():
             scores = Counter()
             for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
-                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn) if args.calc_val_loss else 0
+                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn, args.noise_kind) if args.calc_val_loss else 0
 
                 running_loss_test += loss
 
                 writer.add_scalars(main_tag='scores', tag_scalar_dict=dict(scores), global_step=epoch)
                 progress_bar.update(1)
 
-            if epoch % 100 == 0:
-                # runs it only for the last batch
-                inference_ddim.run_inference_step(None, diffmap_blur, scores, gts, _btc_num, _batch, model,
-                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 15,
-                                                  150, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name))
+                if epoch % 100 == 0:
+                    pipe.inference.run_inference_step(None, diffmap_blur, scores, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
+                                                      args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
+                                                      250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name))
 
             for key in scores:
                 scores[key] /= len(test_loader)
