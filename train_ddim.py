@@ -69,7 +69,7 @@ def parse_args() -> TrainArgs:
                         help='name of the item within the MVTec Dataset to train on')
     parser.add_argument('--resolution', type=int, default=128,
                         help='resolution of the images to generate (dataset will be resized to this resolution during training)')
-    parser.add_argument('--epochs', type=int, default=300,
+    parser.add_argument('--epochs', type=int, default=1000,
                         help='epochs to train for')
     parser.add_argument('--flip', action='store_true',
                         help='whether to augment training data with a flip')
