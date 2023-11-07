@@ -149,7 +149,7 @@ def main(args: TrainArgs, writer: SummaryWriter):
 
 if __name__ == '__main__':
     args: TrainArgs = parse_args()
-    writer = SummaryWriter(args.log_dir, args.run_name)  # TODO add to args
+    writer = SummaryWriter(args.log_dir, args.run_name)
     main(args, writer)
     writer.flush()
     writer.close()
