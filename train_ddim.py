@@ -1,39 +1,36 @@
 # imports
-import json
+import argparse
 import os.path
 import time
-import argparse
 from collections import Counter
+from dataclasses import dataclass
 
-from torch.utils.data import DataLoader
+import diffusers
 import torch
-from torchvision import transforms
+from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
+from tqdm import tqdm
 
+import feature_extraction
 import inference_ddim
+import pipe.inference
+from loader.loader import MVTecDataset
 from pipe.train import train_step
 from pipe.validate import validate_step
-from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
-import diffusers
-from tqdm import tqdm
-from loader.loader import MVTecDataset
-from utils.anomalies import diff_map_to_anomaly_map
-from utils.files import save_args
-from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb
-from dataclasses import dataclass
 from schedulers.scheduling_ddim import DDIMScheduler
-from schedulers.scheduling_ddpm import DBADScheduler
+from utils.files import save_args
 
 
 @dataclass
 class TrainArgs:
     checkpoint_dir: str
-    log_dir: str
     run_name: str
     mvtec_item: str
     flip: bool
-    rotate: bool
-    color_jitter: bool
+    rotate: float
+    color_jitter: float
     resolution: int
     epochs: int
     save_n_epochs: int
@@ -46,19 +43,26 @@ class TrainArgs:
     batch_size: int
     noise_kind: str
     crop: bool
-    plt_imgs: bool
+    log_dir: str
     img_dir: str
+    plt_imgs: bool
     calc_val_loss: bool
+    extractor_path: str
+    checkpoint_name: str
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
                         help='directory path to store the checkpoints')
-    parser.add_argument('--log_dir', type=str, default="logs",
-                        help='directory path to store logs')
+    parser.add_argument('--checkpoint_name', type=str, default="final.pt",
+                        help='Name of the final checkpoint to be stored.')
     parser.add_argument('--run_name', type=str, required=True,
-                        help='name of the run and corresponding checkpoints/logs that are created')
+                        help='Name of the run and corresponding log and checkpoint directory that will be created.')
+    parser.add_argument('--log_dir', type=str, default="logs",
+                        help='directory path to store the checkpoints')
+    parser.add_argument('--img_dir', type=str, default=None,
+                        help='directory path to store the generated images in. Will create a new sub-directory.')
     parser.add_argument('--mvtec_item', type=str, required=True,
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
@@ -83,6 +87,8 @@ def parse_args() -> TrainArgs:
                         help='directory path to the (mvtec) dataset')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
+    parser.add_argument('--extractor_path', type=str,
+                        help='Path to the feature extractor. This is extractor is used to calculate differences between original and reconstructed images in a deep learning fashion.')
     parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
                         help='Influence of the original sample during inference (doesnt affect training)')
     parser.add_argument('--eta', type=float, default=0,
@@ -95,16 +101,14 @@ def parse_args() -> TrainArgs:
     parser.add_argument('--crop', action='store_true',
                         help='If set: the image will be cropped to the resolution instead of resized.')
     parser.add_argument('--plt_imgs', action='store_true',
-                        help='If set: plot the images with matplotlib')
+                        help='If set: Plot images via matplotlib')
     parser.add_argument('--calc_val_loss', action='store_true',
-                        help='If set: calculate not only the train loss, but also the validation loss during each epoch')
-    parser.add_argument('--img_dir', type=str, default=None,
-                        help='Directory to store the images created during the run. A new directory with the run-id will be created in this directory. If not used images wont be stored except for tensorboard.')
+                        help='If set: Calculate the validation loss as well as the train loss.')
 
     return TrainArgs(**vars(parser.parse_args()))
 
 
-def transform_imgs_test(imgs):
+def transform_imgs_test(imgs, args):
     augmentations = transforms.Compose(
         [
             transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
@@ -116,7 +120,7 @@ def transform_imgs_test(imgs):
     return [augmentations(image.convert("RGB")) for image in imgs]
 
 
-def transform_imgs_train(imgs):
+def transform_imgs_train(imgs, args):
     augmentations = transforms.Compose(
         [
             transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
@@ -131,14 +135,14 @@ def transform_imgs_train(imgs):
     return [augmentations(image.convert("RGB")) for image in imgs]
 
 
-def main(args: TrainArgs):
+def main(args: TrainArgs, writer: SummaryWriter):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
-                              transform_imgs_train)
+                              lambda x: transform_imgs_train(x, args))
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
-                             transform_imgs_test)
-    test_loader = DataLoader(test_data, batch_size=2, shuffle=True)
+                             lambda x: transform_imgs_test(x, args))
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
     # ----------- set model, optimizer, scheduler -----------------
     channel_multiplier = {
@@ -166,7 +170,7 @@ def main(args: TrainArgs):
     noise_scheduler = DDPMScheduler(args.train_steps, beta_schedule=args.beta_schedule)
     inf_noise_scheduler = DDIMScheduler(args.train_steps, 150,
                                         beta_schedule=args.beta_schedule, timestep_spacing="leading",
-                                        reconstruction_weight=args.reconstruction_weight)
+                                        reconstruction_weight=args.reconstruction_weight, noise_type=args.noise_kind)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -185,24 +189,22 @@ def main(args: TrainArgs):
     loss_fn = torch.nn.MSELoss()
 
     # additional info/util
-    timestamp = str(time.time())[:11]
-    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}_{timestamp}')
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
-    run_id = f"{args.run_name}_{timestamp}"
     print(diffusers.utils.logging.is_progress_bar_enabled())
     diffusers.utils.logging.disable_progress_bar()
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
-    print(f"run_id: {run_id}")
-    save_args(args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "train_arg_config")
-    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}_{timestamp}", "model_config")
+    print(f"run name: {args.run_name}")
+    save_args(args, f"{args.checkpoint_dir}/{args.run_name}", "train_arg_config")
+    save_args(model_args, f"{args.checkpoint_dir}/{args.run_name}", "model_config")
 
     for epoch in range(args.epochs):
         model.train()
         model.to(args.device)
 
-        progress_bar = tqdm(total=len(train_loader) + len(test_loader))
+        progress_bar_len = len(train_loader) + len(test_loader) if args.calc_val_loss else len(train_loader)
+        progress_bar = tqdm(total=progress_bar_len)
         progress_bar.set_description(f"Epoch {epoch}")
 
         running_loss_train = 0
@@ -215,45 +217,38 @@ def main(args: TrainArgs):
 
         running_loss_test = 0
         with torch.no_grad():
-            scores = Counter()
             for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
-                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn) if args.calc_val_loss else 0
+                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn, args.noise_kind) if args.calc_val_loss else 0
 
                 running_loss_test += loss
 
-                writer.add_scalars(main_tag='scores', tag_scalar_dict=dict(scores), global_step=epoch)
                 progress_bar.update(1)
 
             if epoch % 100 == 0:
-                # runs it only for the last batch
-                inference_ddim.run_inference_step(diffmap_blur, scores, gts, _btc_num, _batch, model,
-                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta,
-                                                  15, 150, args.crop, args.plt_imgs,
-                                                  os.path.join(args.img_dir, run_id))
+                # only for last batch
+                pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
+                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
+                                                  250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))
 
-            for key in scores:
-                scores[key] /= len(test_loader)
 
             progress_bar.set_postfix_str(
-                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}, {dict(scores)}")
+                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}")
             progress_bar.close()
 
             if epoch % args.save_n_epochs == 0 and epoch > 0:
-                torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{epoch}.pt")
+                torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/epoch_{epoch}.pt")
 
-        writer.add_scalar('Loss/train', running_loss_train, epoch)
-        writer.add_scalar('Loss/test', running_loss_test, epoch)
+        writer.add_scalar('Loss/diffusion_train', running_loss_train, epoch)
+        writer.add_scalar('Loss/diffusion_test', running_loss_test, epoch)
 
-    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution, 'eta': args.eta,
-                        'recon_weight': args.reconstruction_weight}, {'MSE': running_loss_test},
-                       run_name='hp')
+    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution}, {}, run_name='hp')
 
-    writer.flush()
-    writer.close()
-
-    torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}_{timestamp}/epoch_{args.epochs}.pt")
+    torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/{args.checkpoint_name}")
 
 
 if __name__ == '__main__':
     args: TrainArgs = parse_args()
-    main(args)
+    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}')
+    main(args, writer)
+    writer.flush()
+    writer.close()

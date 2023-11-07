@@ -1,68 +1,19 @@
-import os
-
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from torchvision import transforms
-from torchvision.utils import make_grid
 import torchvision.transforms.functional as F
 from PIL import Image
 
-from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 
-
-
-def generate_samples(model, noise_scheduler, original_images, eta, steps_to_regenerate, start_at_timestep, patch_imgs=False, noise_kind='gaussian'):
-    num_imgs = len(original_images)
-    if patch_imgs:
-        original_images = split_batch_into_patch(original_images, model.sample_size)
-
-    pipeline = DDIMReconstructionPipeline(
-        unet=model,
-        scheduler=noise_scheduler,
-        noise_kind=noise_kind
-    )
-
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    # run pipeline in inference (sample random noise and denoise)
-    pipe_output = pipeline(
-        batch_size=len(original_images),
-        generator=generator,
-        num_inference_steps=steps_to_regenerate,
-        original_images=original_images.to(model.device),
-        eta=eta,
-        start_at_timestep=start_at_timestep,
-        output_type="numpy",
-    )
-    reconstruction = pipe_output.images
-    history = pipe_output.history
-
-    reconstruction = torch.from_numpy(reconstruction)
-
-    original = unnormalize_original_img(original_images)
-
-    if patch_imgs:
-        reconstruction = stitch_batch_patches(reconstruction, num_imgs)
-        original = stitch_batch_patches(original, num_imgs)
-
-    # TODO try using (diff_map > 0.5).float() directly as the anomaly map => i.e. no diffmap to plot
-    diff_map = (original - reconstruction) ** 2  # TODO try diff in HSV instead of RGB
-    diff_map = diff_map / torch.amax(diff_map, dim=(2, 3)).reshape(-1, 3, 1, 1)  # per channel and image
-    # diff_map = transforms.functional.rgb_to_grayscale(diff_map)  # TODO to 1D by taking max of the 3 channels,
-    diff_map = torch.amax(diff_map, (1))[:, None, :, :]
-    history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
-
-    return original, reconstruction, diff_map, history
-
-
-def plot_single_channel_imgs(imgs, titles, cmaps=None, save_to=None, show_img=False):
+def plot_single_channel_imgs(imgs, titles, cmaps=None, vmaxs=None, save_to=None, show_img=False):
     if cmaps is None:
         cmaps = ['viridis' for _ in imgs]
 
     fig, axs = plt.subplots(nrows=1, ncols=len(imgs))
     fig.set_figwidth(15)
-    for i, (img, title, cmap) in enumerate(zip(imgs, titles, cmaps)):
-        aximg = axs[i].imshow(img.squeeze(), cmap=cmap)
+    for i, (img, title, cmap, vmax) in enumerate(zip(imgs, titles, cmaps, vmaxs)):
+        aximg = axs[i].imshow(img.squeeze(), cmap=cmap, vmin=0, vmax=vmax)
         axs[i].set_title(title)
         axs[i].tick_params(which="both", bottom=False, left=False, labelbottom=False, labelleft=False)
         fig.colorbar(aximg, ax=axs[i], shrink=1)
@@ -104,9 +55,8 @@ def show(imgs, title):
 
 
 def output_to_img(output, num_imgs):
-    img = torch.from_numpy(output)
-    img = stitch_batch_patches(img, num_imgs)
-    return img
+    img = stitch_batch_patches(output, num_imgs)
+    return img.cpu()
 
 
 def unnormalize_original_img(original_image):
@@ -116,6 +66,7 @@ def unnormalize_original_img(original_image):
 
 def gray_to_rgb(image: torch.Tensor):
     return image.repeat((1, 3, 1, 1))
+
 
 def split_batch_into_patch(batch: torch.Tensor, patch_size: int) -> torch.Tensor:
     """
@@ -129,6 +80,7 @@ def split_batch_into_patch(batch: torch.Tensor, patch_size: int) -> torch.Tensor
 
     patches = [split_into_patches(img, patch_size) for img in torch.unbind(batch)]
     return torch.cat(patches)
+
 
 def split_into_patches(image: torch.Tensor, patch_size: int) -> torch.Tensor:
     """
@@ -150,11 +102,11 @@ def split_into_patches(image: torch.Tensor, patch_size: int) -> torch.Tensor:
 
     return patches
 
+
 def stitch_batch_patches(patches: torch.Tensor, num_imgs: int) -> torch.Tensor:
     ppi = patches.shape[0] // num_imgs  # number of patches per image
     img_list = [stitch_patches(patches[ppi * i:ppi * (i + 1)]) for i in range(num_imgs)]
     return torch.cat(img_list)
-
 
 
 def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
@@ -177,6 +129,7 @@ def stitch_patches(patches: torch.Tensor) -> torch.Tensor:
 
     return stitched.unsqueeze(0)
 
+
 def add_batch_overlay(imgs: torch.Tensor, overlays: torch.Tensor) -> torch.Tensor:
     """
     Wrapper for add_overlay() to add an overlay to each image
@@ -187,6 +140,7 @@ def add_batch_overlay(imgs: torch.Tensor, overlays: torch.Tensor) -> torch.Tenso
     """
 
     return torch.stack([add_overlay(img, overlay) for (img, overlay) in zip(imgs, overlays)])
+
 
 def add_overlay(img: torch.Tensor, overlay: torch.Tensor) -> torch.Tensor:
     """

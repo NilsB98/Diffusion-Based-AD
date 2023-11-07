@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from collections import Counter
 from dataclasses import dataclass
 
 import torch
@@ -10,14 +11,12 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
-import utils.anomalies
+import feature_extraction
+from pipe.inference import run_inference_step
 from loader.loader import MVTecDataset
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
-from utils.metrics import scores, scores_batch
-from utils.visualize import generate_samples, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
-    split_into_patches, add_overlay, add_batch_overlay
-from collections import Counter
+from utils.metrics import aggregate_img_scores, normalize_pxl_scores
 
 
 @dataclass
@@ -29,6 +28,7 @@ class InferenceArgs:
     mvtec_item_states: list
     checkpoint_dir: str
     checkpoint_name: str
+    run_name: str
     log_dir: str
     train_steps: int
     beta_schedule: str
@@ -39,20 +39,26 @@ class InferenceArgs:
     img_dir: str
     plt_imgs: bool
     patch_imgs: bool
-    run_id: str
     batch_size: int
-
+    extractor_path: str
+    feature_smoothing_kernel: int
+    fl_threshold: float
+    pl_threshold: float
+    fl_contrib:float
+    pl_contrib:float
 
 def parse_args() -> InferenceArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, required=True,
-                        help='directory path to store the checkpoints')
+                        help='directory path to the stored checkpoint and model config.')
     parser.add_argument('--log_dir', type=str, default="logs",
                         help='directory path to store logs')
     parser.add_argument('--img_dir', type=str, default="generated_imgs",
                         help='directory path to store generated imgs')
-    parser.add_argument('--checkpoint_name', type=str, required=True,
+    parser.add_argument('--run_name', type=str, required=True,
                         help='name of the run and corresponding checkpoints/logs that are created')
+    parser.add_argument('--checkpoint_name', type=str, required=True,
+                        help='name of the checkpoint in the checkpoint_dir to load')
     parser.add_argument('--mvtec_item', type=str, required=True,
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
@@ -69,10 +75,10 @@ def parse_args() -> InferenceArgs:
                         help='Type of schedule for the beta/variance values')
     parser.add_argument('--dataset_path', type=str, required=True,
                         help='directory path to the (mvtec) dataset')
-    parser.add_argument('--run_id', type=str, default='inference',
-                        help='id of the run, required for the logging')
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
+    parser.add_argument('--extractor_path', type=str,
+                        help='Path to the feature extractor. This is extractor is used to calculate differences between original and reconstructed images in a deep learning fashion.')
     parser.add_argument('--recon_weight', type=float, default=1, dest="reconstruction_weight",
                         help='Influence of the original sample during generation')
     parser.add_argument('--eta', type=float, default=0,
@@ -85,6 +91,16 @@ def parse_args() -> InferenceArgs:
                         help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
     parser.add_argument('--batch_size', type=int, default=2,
                         help='Number of images to process per batch')
+    parser.add_argument('-fsk', '--feature_smoothing_kernel', type=int, default=3,
+                        help='Size of the kernel to be used for smoothing the extracted features. Set to 1 for no smoothing.')
+    parser.add_argument('--pl_threshold', type=float, default=0.029,
+                        help='Pixel level threshold for difference-map')
+    parser.add_argument('--fl_threshold', type=float, default=0.33,
+                        help='Feature level threshold for difference-map')
+    parser.add_argument('--fl_contrib', type=float, default=0.7,
+                        help='Contribution of the feature-level diffMap to the combined diffMap')
+    parser.add_argument('--pl_contrib', type=float, default=0.7,
+                        help='Contribution of the pixel-level diffMap to the combined diffMap')
 
     return InferenceArgs(**vars(parser.parse_args()))
 
@@ -125,23 +141,32 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     model.eval()
     model.to(args.device)
 
-    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) +1, 4)
+    extractor = feature_extraction.ResNetFE(args.extractor_path)
+    extractor.eval()
+    extractor.to(args.device)
+
+    # gaussian kernel to smoothen the diff-map with
+    diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
+    # directory to store the generated images in
+    img_results_dir = os.path.join(args.img_dir, args.run_name, "inf_results")
 
     with torch.no_grad():
         # validate and generate images
+        noise_kind = train_arg_config.get("noise_kind", "gaussian")
         noise_scheduler_inference = DDIMScheduler(args.train_steps, args.start_at_timestep,
                                                   beta_schedule=args.beta_schedule, timestep_spacing="leading",
-                                                  reconstruction_weight=args.reconstruction_weight)
-        noise_kind = train_arg_config.get("noise_kind", "gaussian")
+                                                  reconstruction_weight=args.reconstruction_weight, noise_type=noise_kind)
         eval_scores = Counter()
 
         for i, (imgs, states, gts) in enumerate(test_loader):
-            run_inference_step(diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
+            run_inference_step(extractor, diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
                                noise_scheduler_inference, states, writer, args.eta, args.num_inference_steps,
-                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, args.img_dir)
+                               args.start_at_timestep, args.patch_imgs, args.plt_imgs, img_results_dir,
+                               smoothing_kernel_size=args.feature_smoothing_kernel, pl_threshold=args.pl_threshold, fl_threshold=args.fl_threshold)
 
-        for key in eval_scores:
-            eval_scores[key] /= len(test_loader)
+        normalize_pxl_scores(len(test_loader), eval_scores)
+        aggregate_img_scores(eval_scores)
+
         writer.add_hparams({'category': args.mvtec_item, 'eta': args.eta,
                             'recon_weight': args.reconstruction_weight, 'states': ','.join(args.mvtec_item_states),
                             't': args.start_at_timestep, 'num_steps': args.num_inference_steps,
@@ -150,40 +175,9 @@ def main(args: InferenceArgs, writer: SummaryWriter):
         print(eval_scores)
 
 
-def run_inference_step(diffmap_blur, eval_scores, gts, btc_idx, imgs, model, noise_kind, noise_scheduler_inference,
-                       states, writer, eta, num_inference_steps, start_at_timestep, patch_imgs, plt_imgs, img_dir):
-    originals, reconstructions, diffmaps, history = generate_samples(model, noise_scheduler_inference,
-                                                                     imgs,
-                                                                     eta, num_inference_steps,
-                                                                     start_at_timestep,
-                                                                     patch_imgs,
-                                                                     noise_kind)
-    anomaly_maps = utils.anomalies.diff_map_to_anomaly_map(diffmaps, .3, diffmap_blur)
-    overlays = add_batch_overlay(originals, anomaly_maps)
-    eval_scores.update(scores_batch(gts, anomaly_maps))
-    for idx in range(len(gts)):
-        if not os.path.exists(f"{img_dir}"):
-            os.makedirs(f"{img_dir}")
-
-        plot_single_channel_imgs([gts[idx], diffmaps[idx], anomaly_maps[idx]],
-                                 ["ground truth", "diff-map", "anomaly-map"],
-                                 cmaps=['gray', 'viridis', 'gray'],
-                                 save_to=f"{img_dir}/{btc_idx}_{states[idx]}_heatmap.png", show_img=plt_imgs)
-        plot_rgb_imgs([originals[idx], reconstructions[idx], overlays[idx]], ["original", "reconstructed", "overlay"],
-                      save_to=f"{img_dir}/{btc_idx}_{states[idx]}.png", show_img=plt_imgs)
-
-        if writer is not None:
-            for t, im in zip(history["timesteps"], history["images"]):
-                writer.add_images(f"{btc_idx}_{states[0]}_process", im[idx].unsqueeze(0), t)
-
-            writer.add_images(f"{btc_idx}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
-                [originals[idx], reconstructions[idx], gray_to_rgb(diffmaps[idx])[0], gray_to_rgb(anomaly_maps[idx])[0],
-                 gray_to_rgb(gts[idx])[0]]))
-
-
-# if __name__ == '__main__':
-#     args: InferenceArgs = parse_args()
-#     writer = SummaryWriter(f'{args.log_dir}/{args.run_id}') if args.log_dir else None
-#     main(args, writer)
-#     writer.flush()
-#     writer.close()
+if __name__ == '__main__':
+    args: InferenceArgs = parse_args()
+    writer = SummaryWriter(f'{args.log_dir}/{args.checkpoint_dir.split("/")[-1]}') if args.log_dir else None
+    main(args, writer)
+    writer.flush()
+    writer.close()
