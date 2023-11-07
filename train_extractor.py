@@ -6,6 +6,7 @@ import os
 import torch
 from diffusers import UNet2DModel
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
 from feature_extraction.autoencoder import Autoencoder, AETrainer, DBTrainer
@@ -36,17 +37,21 @@ class TrainArgs:
     start_at_timestep: int
     steps_to_regenerate: int
     use_diffusion_model: bool
+    log_dir: str
+    run_name: str
 
 
 def parse_args() -> TrainArgs:
     parser = argparse.ArgumentParser(description='Add config for the training')
     parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
-                        help='directory path to store the checkpoints')
+                        help='Directory path to store the checkpoints in.')
+    parser.add_argument('--log_dir', type=str, default="logs",
+                        help='Directory to store the logs in. Will create a sub-directory with the "run_name"')
+    parser.add_argument('--run_name', type=str, default="extractor",
+                        help='Name of the run. Used by Logging to create a new directory in the logging dir.')
     parser.add_argument('--item', type=str, required=True,
-                        choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
-                                 "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
-                        help='name of the item within the MVTec Dataset to train on')
-    parser.add_argument('--resolution', type=int, default=128,
+                        help='name of the item within the Dataset to train on')
+    parser.add_argument('--resolution', type=int, default=256,
                         help='resolution of the images to generate (dataset will be resized to this resolution during training)')
     parser.add_argument('--epochs', type=int, default=30,
                         help='epochs to train for')
@@ -65,7 +70,7 @@ def parse_args() -> TrainArgs:
     parser.add_argument('--device', type=str, default="cuda",
                         help='device to train on')
     parser.add_argument('--checkpoint_name', type=str, default=None,
-                        help='Checkpoint to load diffusion model from.')
+                        help='Checkpoint to load diffusion model from. (Only relevant  if use_diffusion_model is set)')
     parser.add_argument('--save_to', type=str, required=True,
                         help='Full path and name to where the trained extractor should be saved (including .pt ending)')
     parser.add_argument('--eta', type=float, default=0,
@@ -85,7 +90,7 @@ def parse_args() -> TrainArgs:
     return TrainArgs(**vars(parser.parse_args()))
 
 
-def main(args: TrainArgs):
+def main(args: TrainArgs, writer: SummaryWriter):
     print(f"**** training feature extractor ****")
 
     def transform_imgs(imgs):
@@ -135,13 +140,16 @@ def main(args: TrainArgs):
     extractor = ResNetFE()
     ae = Autoencoder(extractor)
     ae.init_decoder((3, args.resolution, args.resolution))
-    trainer = AETrainer(ae, train_loader, test_loader) if not args.use_diffusion_model else DBTrainer(ae, denoise_imgs,
+    trainer = AETrainer(ae, train_loader, test_loader, writer=writer) if not args.use_diffusion_model else DBTrainer(ae, denoise_imgs,
                                                                                                     train_loader,
-                                                                                                    test_loader)
+                                                                                                    test_loader, writer=writer)
     trainer.train(args.epochs)
     torch.save(extractor.state_dict(), f"{args.save_to}")
 
 
 if __name__ == '__main__':
     args: TrainArgs = parse_args()
-    main(args)
+    writer = SummaryWriter(args.log_dir, args.run_name)  # TODO add to args
+    main(args, writer)
+    writer.flush()
+    writer.close()

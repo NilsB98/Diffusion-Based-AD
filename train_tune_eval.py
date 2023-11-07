@@ -4,6 +4,7 @@ Meta Script to run the training, parameter tuning and evaluation in one script.
 import argparse
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
 from torch.utils.tensorboard import SummaryWriter
@@ -80,24 +81,29 @@ def main():
     diffusion_train_args, extractor_train_args, eval_args, all_args = parse_args()
 
     # setup the logger
-    writer = SummaryWriter(all_args.log_dir, flush_secs=30)
+    p = Path(all_args.log_dir, all_args.run_id)
+    p.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(str(p.absolute()), flush_secs=30)
 
     # train the diffusion model
     if not all_args.skip_train:
-        train_ddim.main(diffusion_train_args)   # TODO add writer
+        train_ddim.main(diffusion_train_args, writer)
 
     # train the extractor
     if not all_args.skip_extractor:
-        train_extractor.main(extractor_train_args)  # TODO add writer
+        train_extractor.main(extractor_train_args, writer)
 
     # find the pixel- and feature-level thresholds for the difference-map
     if not all_args.skip_threshold:
-        thresholds = evaluation.eval_diffmap_threshold(eval_args)   # TODO add writer
+        thresholds = evaluation.eval_diffmap_threshold(eval_args)
         eval_args.pl_threshold = thresholds['threshold_pl']
         eval_args.fl_threshold = thresholds['threshold_fl']
 
     # evaluate the model
     inference_ddim.main(eval_args, writer)
+
+    writer.flush()
+    writer.close()
 
 
 def parse_args():
@@ -207,7 +213,7 @@ def parse_args():
     diffusionTrainArgs = train_ddim.TrainArgs(args.diffusion_checkpoint_dir, args.run_id, args.item, args.flip, args.rotate, args.color_jitter, args.resolution, args.epochs_diffusion, args.save_n_epochs, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.log_dir, args.img_dir, args.plt_imgs, args.calc_val_loss, args.extractor_path, args.diffusion_checkpoint_name)
     checkpoint_dir = os.path.join(args.diffusion_checkpoint_dir, args.run_id)
 
-    extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model)
+    extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model, args.log_dir, args.run_id)
 
     evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.run_id, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold, args.fl_contrib, args.pl_contrib)
 

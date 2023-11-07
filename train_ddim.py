@@ -135,7 +135,7 @@ def transform_imgs_train(imgs, args):
     return [augmentations(image.convert("RGB")) for image in imgs]
 
 
-def main(args: TrainArgs):
+def main(args: TrainArgs, writer: SummaryWriter):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
                               lambda x: transform_imgs_train(x, args))
@@ -188,12 +188,7 @@ def main(args: TrainArgs):
     )
     loss_fn = torch.nn.MSELoss()
 
-    # extractor = feature_extraction.ResNetFE(args.extractor_path)
-    # extractor.eval()
-    # extractor.to(args.device)
-
     # additional info/util
-    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}')
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
     print(diffusers.utils.logging.is_progress_bar_enabled())
     diffusers.utils.logging.disable_progress_bar()
@@ -222,43 +217,38 @@ def main(args: TrainArgs):
 
         running_loss_test = 0
         with torch.no_grad():
-            scores = Counter()
             for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
                 loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn, args.noise_kind) if args.calc_val_loss else 0
 
                 running_loss_test += loss
 
-                writer.add_scalars(main_tag='scores', tag_scalar_dict=dict(scores), global_step=epoch)
                 progress_bar.update(1)
 
-                if epoch % 100 == 0:
-                    pipe.inference.run_inference_step(None, diffmap_blur, scores, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
-                                                      args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
-                                                      250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))
+            if epoch % 100 == 0:
+                # only for last batch
+                pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
+                                                  args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
+                                                  250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))
 
-            for key in scores:
-                scores[key] /= len(test_loader)
 
             progress_bar.set_postfix_str(
-                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}, {dict(scores)}")
+                f"Train Loss: {running_loss_train / len(train_loader)}, Test Loss: {running_loss_test / len(test_loader)}")
             progress_bar.close()
 
             if epoch % args.save_n_epochs == 0 and epoch > 0:
                 torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/epoch_{epoch}.pt")
 
-        writer.add_scalar('Loss/train', running_loss_train, epoch)
-        writer.add_scalar('Loss/test', running_loss_test, epoch)
+        writer.add_scalar('Loss/diffusion_train', running_loss_train, epoch)
+        writer.add_scalar('Loss/diffusion_test', running_loss_test, epoch)
 
-    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution, 'eta': args.eta,
-                        'recon_weight': args.reconstruction_weight}, {'MSE': running_loss_test},
-                       run_name='hp')
-
-    writer.flush()
-    writer.close()
+    writer.add_hparams({'category': args.mvtec_item, 'res': args.resolution}, {}, run_name='hp')
 
     torch.save(model.state_dict(), f"{args.checkpoint_dir}/{args.run_name}/{args.checkpoint_name}")
 
 
 if __name__ == '__main__':
     args: TrainArgs = parse_args()
-    main(args)
+    writer = SummaryWriter(f'{args.log_dir}/{args.run_name}')
+    main(args, writer)
+    writer.flush()
+    writer.close()

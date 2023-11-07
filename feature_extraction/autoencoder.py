@@ -2,6 +2,7 @@ from typing import Tuple, Callable
 
 import torch
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Autoencoder(nn.Module):
@@ -69,7 +70,7 @@ class Autoencoder(nn.Module):
 
 class AETrainer:
 
-    def __init__(self, model: nn.Module, train_loader, test_loader, optimizer=None, loss_fn=None, device=None):
+    def __init__(self, model: nn.Module, train_loader, test_loader, optimizer=None, loss_fn=None, device=None, writer:SummaryWriter=None):
         self.device = device if device is not None else 'cuda:0'
         self.loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
         self.model = model.to(self.device)
@@ -82,10 +83,12 @@ class AETrainer:
             betas=(0.95, 0.999),
             eps=1e-08,
         )
+        self.writer:SummaryWriter = writer
 
     def train(self, epochs):
         self.model.train()
         self.model = self.model.to(self.device)
+        self.writer.add_text('FeatureExtractorTrainer', 'AETrainer')
 
         for param in self.model.parameters():
             param.requires_grad = True
@@ -103,6 +106,7 @@ class AETrainer:
                 self.optimizer.step()
                 train_loss += loss.item()
             train_loss /= len(self.train_loader)
+            self.writer.add_scalar('Loss/extractor_train', train_loss, epoch)
 
             test_loss = 0
             with torch.no_grad():
@@ -117,6 +121,7 @@ class AETrainer:
                     test_loss += loss.item()
                 self.model.train()
                 test_loss /= len(self.test_loader)
+                self.writer.add_scalar('Loss/extractor_test', test_loss, epoch)
                 print(f"epoch {epoch}: {test_loss=:.5f} {train_loss=:.5f}")
 
 
@@ -125,13 +130,14 @@ class DBTrainer(AETrainer):
     Diffusion-Based Trainer ot the auto-encoder
     """
 
-    def __init__(self, model: nn.Module, diffusion_generator: Callable[[torch.Tensor], torch.Tensor], train_loader, test_loader):
-        super().__init__(model, train_loader, test_loader)
+    def __init__(self, model: nn.Module, diffusion_generator: Callable[[torch.Tensor], torch.Tensor], train_loader, test_loader, writer=None):
+        super().__init__(model, train_loader, test_loader, writer=writer)
         self.diffusion_generator = diffusion_generator
 
     def train(self, epochs):
         self.model.train()
         self.model = self.model.to(self.device)
+        self.writer.add_text('FeatureExtractorTrainer', 'DBTrainer')
 
         for param in self.model.parameters():
             param.requires_grad = True
@@ -149,6 +155,8 @@ class DBTrainer(AETrainer):
                 loss.backward()
                 self.optimizer.step()
                 train_loss += loss.item()
+            train_loss /= len(self.train_loader)
+            self.writer.add_scalar('Loss/extractor_train', train_loss, epoch)
 
             test_loss = 0
             with torch.no_grad():
@@ -162,4 +170,6 @@ class DBTrainer(AETrainer):
                     loss = self.loss_fn(reconstructed, batch)
                     test_loss += loss.item()
                 self.model.train()
+                test_loss /= len(self.test_loader)
+                self.writer.add_scalar('Loss/extractor_test', test_loss, epoch)
                 print(f"epoch {epoch}: {test_loss=:.5f} {train_loss=:.5f}")

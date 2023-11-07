@@ -48,10 +48,10 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
         v_maxs = [1] * len(titles)
 
         plot_single_channel_imgs(single_channel_imgs, titles, cmaps=c_maps, vmaxs=v_maxs,
-                                 save_to=f"{img_dir}/{img_file_hints}_{states[idx]}_heatmap.png", show_img=plt_imgs)
+                                 save_to=f"{img_dir}/{img_file_hints}_{states[idx]}_{idx}_heatmap.png", show_img=plt_imgs)
 
         plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
-                      save_to=f"{img_dir}/{img_file_hints}_{states[idx]}.png", show_img=plt_imgs)
+                      save_to=f"{img_dir}/{img_file_hints}_{states[idx]}_{idx}.png", show_img=plt_imgs)
 
         if writer is not None:
             for t, im in zip(history["timesteps"], history["images"]):
