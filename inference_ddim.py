@@ -162,7 +162,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
             run_inference_step(extractor, diffmap_blur, eval_scores, gts, i, imgs, model, noise_kind,
                                noise_scheduler_inference, states, writer, args.eta, args.num_inference_steps,
                                args.start_at_timestep, args.patch_imgs, args.plt_imgs, img_results_dir,
-                               smoothing_kernel_size=args.feature_smoothing_kernel, pl_threshold=args.pl_threshold, fl_threshold=args.fl_threshold)
+                               smoothing_kernel_size=args.feature_smoothing_kernel, pl_threshold=args.pl_threshold, fl_threshold=args.fl_threshold, fl_contrib=args.fl_contrib, pl_contrib=args.pl_contrib)
 
         normalize_pxl_scores(len(test_loader), eval_scores)
         aggregate_img_scores(eval_scores)
