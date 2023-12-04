@@ -1,8 +1,7 @@
 import torch
 from torch import Tensor
 from utils.visualize import split_into_patches, stitch_patches
-from torchvision.transforms import ColorJitter
-import torchvision.transforms.functional as F
+from torchvision.transforms import ColorJitter, RandomRotation
 
 from noise.simplex import simplexGenerator
 
@@ -11,6 +10,7 @@ class CorruptionGenerator:
         # TODO load anomalies in RAM
         self.num_patches = num_patches
         self.color_trans = ColorJitter(.2, 0, .2, .5)
+        self.rot_trans = RandomRotation(180)
 
     def generate_corruption(self, img: Tensor, is_heterologous_anomaly=True):
         """
@@ -22,9 +22,10 @@ class CorruptionGenerator:
         """
         if is_heterologous_anomaly:
             patch_size = img.shape[-1] // self.num_patches
+            img = self.rot_trans(img)
             patches = split_into_patches(img, patch_size)
             patches = patches[torch.randperm(len(patches))]
-            patches = self.color_trans(patches)  # self.color_trans(patches)
+            patches = self.color_trans(patches)
             corruption_img = stitch_patches(patches)
             return corruption_img
         else:
@@ -53,6 +54,9 @@ class ImageCorruptor:
         corrupted_img = no_anomaly_regions * img + (1-b) * (anomaly_regions * corruptions) + b * (anomaly_regions * img)
 
         return corrupted_img[0]
+
+    def __call__(self, img, transparency):
+        return self.corrupt_img(img, transparency)
 
 
 
