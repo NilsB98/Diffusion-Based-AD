@@ -57,6 +57,10 @@ The folder-structure would the look like this:<br>
 │&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└───good <br>
 
 
+### Synthetic anomalies
+To produce synthetic anomalies for training purposes the Describable Textures Dataset is used.
+This can be downloaded [here](https://www.robots.ox.ac.uk/~vgg/data/dtd/) 
+
 ### Related Papers and Features
 * [Anomaly Detection with Conditioned Denoising Diffusion Models](https://arxiv.org/pdf/2305.15956v1.pdf): This paper displayed the idea to condition the diffusion model on the original image, i.e. interpolate the latent vector with the initial image, as well as using a feature-based difference map. <br>
 
