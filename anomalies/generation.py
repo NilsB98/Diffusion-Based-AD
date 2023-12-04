@@ -24,8 +24,8 @@ class CorruptionGenerator:
             patch_size = img.shape[-1] // self.num_patches
             patches = split_into_patches(img, patch_size)
             patches = patches[torch.randperm(len(patches))]
+            patches = self.color_trans(patches)  # self.color_trans(patches)
             corruption_img = stitch_patches(patches)
-            corruption_img = F.adjust_hue(corruption_img[0], .2)  # self.color_trans(patches)
             return corruption_img
         else:
             raise NotImplementedError()
@@ -40,13 +40,19 @@ class ImageCorruptor:
         self.corruption_generator = corruption_generator
 
     def corrupt_img(self, img, transparency):
-        noise = simplexGenerator.rand_2d_octaves(img.shape, 6, 0.6)
+        b = transparency
+        noise = torch.tensor(simplexGenerator.rand_2d_octaves(img.shape[-2:], 6, 0.6))
 
         allowed_regions = torch.ones_like(img)  # defines where anomalies are allowed
-        proposed_regions = torch.where(noise > 0, 1, 0)# defines at which places the anomalies should be placed
+        proposed_regions = torch.where(noise > 0.4, 1, 0) # defines at which places the anomalies should be placed
         anomaly_regions = allowed_regions * proposed_regions
+        no_anomaly_regions = torch.abs(anomaly_regions - 1)
 
-        return
+        corruptions = self.corruption_generator(img)
+
+        corrupted_img = no_anomaly_regions * img + (1-b) * (anomaly_regions * corruptions) + b * (anomaly_regions * img)
+
+        return corrupted_img[0]
 
 
 
