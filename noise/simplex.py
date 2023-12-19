@@ -70,6 +70,11 @@ class Simplex_CLASS:
         noise = np.stack([self.rand_3d_octaves(shape[1:], octaves, persistence, frequency) for _ in range(shape[0])], axis=0)
         return torch.tensor(noise, dtype=torch.float32)
 
+    def batch_2d_octaves(self, shape, octaves=1, persistence=0.5, frequency=32):
+        # assume shape of (batch, channel, height, width)
+        assert len(shape) == 4, f"expected len(shape) == 4, but got {len(shape)}"
+        noise = np.stack([self.rand_2d_octaves(shape[2:], octaves, persistence, frequency) for _ in range(shape[0])], axis=0)
+        return torch.tensor(noise, dtype=torch.float32)
 
     def rand_2d_octaves(self, shape, octaves=1, persistence=0.5, frequency=32):
         """

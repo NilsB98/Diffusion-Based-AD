@@ -1,17 +1,16 @@
-import glob
+import pathlib
 import pathlib
 import random
 
-import matplotlib.pyplot as plt
 import torch
-import torchvision.io
-from torch import Tensor
-from utils.visualize import split_into_patches, stitch_patches
-from torchvision.transforms import ColorJitter, RandomRotation, Resize
-from torchvision.io import read_image
 import torchvision.transforms.functional as F
+from torch import Tensor
+from torchvision.io import read_image
+from torchvision.transforms import ColorJitter, RandomRotation
 
 from noise.simplex import simplexGenerator
+from utils.visualize import split_into_patches, stitch_patches
+
 
 class CorruptionGenerator:
     def __init__(self, path_to_anomaly_textures, num_patches=8):
@@ -29,7 +28,7 @@ class CorruptionGenerator:
         :param is_heterologous_anomaly:
         :return:
         """
-        if is_heterologous_anomaly:
+        if is_heterologous_anomaly:     # TODO extend for batches
             patch_size = img.shape[-1] // self.num_patches
             img = self.rot_trans(img)
             patches = split_into_patches(img, patch_size)
@@ -63,7 +62,7 @@ class ImageCorruptor:
 
     def corrupt_img(self, img, transparency):
         b = transparency
-        noise = torch.tensor(simplexGenerator.rand_2d_octaves(img.shape[-2:], 6, 0.6))
+        noise = simplexGenerator.batch_2d_octaves(img.shape, 6, 0.6)
 
         allowed_regions = torch.ones_like(img)  # defines where anomalies are allowed
         proposed_regions = torch.where(noise > 0.4, 1, 0) # defines at which places the anomalies should be placed
