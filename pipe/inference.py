@@ -34,6 +34,7 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
 
         # iterate over created diffmaps
         single_channel_imgs = [gts[idx].cpu()]
+        # single_channel_imgs[0] = single_channel_imgs[0][0:1, :, :]
         titles = ["ground truth"]
         c_maps = ['gray']
 
@@ -61,7 +62,7 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
             writer.add_images(f"{img_file_hints}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
                 [originals[idx].cpu(), reconstructions[idx].cpu(), gray_to_rgb(diffmaps['diffmap_pl'])[0].cpu(), gray_to_rgb(anomaly_maps[idx].cpu())[0],
                  gray_to_rgb(gts[idx].cpu())[0]]))
-
+            # changed for cores data: gray_to_rgb(gts[idx].cpu())[0]
 
 def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
                      patch_imgs=False, noise_kind='gaussian', fl_smoothing_kernel_size=3):

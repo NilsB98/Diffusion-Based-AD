@@ -127,6 +127,7 @@ def transform_imgs_train(imgs, args):
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.RandomRotation(args.rotate),
             transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
+            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -224,11 +225,11 @@ def main(args: TrainArgs, writer: SummaryWriter):
 
                 progress_bar.update(1)
 
-            if epoch % 100 == 0:
+            if epoch % 50 == 0:
                 # only for last batch
                 pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
                                                   args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
-                                                  250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))
+                                                  250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))    # 30/150
 
 
             progress_bar.set_postfix_str(
