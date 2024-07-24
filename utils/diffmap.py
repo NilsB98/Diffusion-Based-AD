@@ -119,13 +119,13 @@ def create_diffmaps(original, reconstruction, extractor, extractor_resolution: i
 
         # feature-level
         num_imgs = len(original)
-        original = split_batch_into_patch(original, extractor_resolution)
-        reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
+        # original = split_batch_into_patch(original, extractor_resolution)
+        # reconstruction = split_batch_into_patch(reconstruction, extractor_resolution)
 
         if extractor is not None:
             resnet_diffmap = feature_extraction.utils.create_fl_diffmap(extractor, original, reconstruction,
                                                                         fl_smoothing_size)
-            resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
+            # resnet_diffmap = stitch_batch_patches(resnet_diffmap, num_imgs)
             diff_maps['diffmap_fl'] = resnet_diffmap
 
         return diff_maps

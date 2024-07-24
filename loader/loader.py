@@ -27,7 +27,7 @@ class MVTecDataset(Dataset):
             return img, state
 
         gt = Image.open(self.all_gt_paths[idx]) if self.all_gt_paths[idx] is not None else Image.new('L', img.shape[1:])
-        gt = self._transform_gt([gt], img.shape[1], img.shape[0])
+        gt = self._transform_gt([gt], img.shape[1], img.shape[2])[0]
         return img, state, gt
 
 

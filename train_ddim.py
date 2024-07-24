@@ -229,10 +229,13 @@ def main(args: TrainArgs, writer: SummaryWriter):
         for btc_num, (batch, _) in enumerate(train_loader):
             batch = tiler.tile(batch)
             shuffled_idxs = np.random.permutation(np.arange(len(batch)))
-            #loss = train_step(model, batch[shuffled_idxs][:2], noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
+            loss = train_step(model, batch[shuffled_idxs][:2], noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
 
-            #running_loss_train += loss
+            running_loss_train += loss
             progress_bar.update(1)
+
+        del batch
+        torch.cuda.empty_cache()
 
         running_loss_test = 0
         with torch.no_grad():
@@ -251,7 +254,8 @@ def main(args: TrainArgs, writer: SummaryWriter):
                 pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_last_btc", _batch, model,
                                                   args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
                                                   250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))    # 30/150
-                model.train()
+                del _batch, _labels, gts
+                torch.cuda.empty_cache()
 
 
             progress_bar.set_postfix_str(

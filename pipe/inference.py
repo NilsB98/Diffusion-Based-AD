@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import torch
 
 from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
@@ -33,9 +34,13 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
     for idx in range(len(gts)):
         Path(img_dir).mkdir(parents=True, exist_ok=True)
 
+        # TODO just save reconstruction directly
+        plt.imsave(f'{img_dir}/{idx}_reconstruction.png', reconstructions.cpu()[0, 0], cmap='gray')
+        plt.imsave(f'{img_dir}/{idx}_original.png', originals.cpu()[0, 0], cmap='gray')
+        plt.imsave(f'{img_dir}/{idx}_diffmap.png', diffmaps["diffmap_pl"].cpu()[0, 0], cmap='viridis')
         # iterate over created diffmaps
         single_channel_imgs = [gts[idx].cpu()]
-        # single_channel_imgs[0] = single_channel_imgs[0][0:1, :, :]
+        single_channel_imgs[0] = single_channel_imgs[0][0:1, :, :]
         titles = ["ground truth"]
         c_maps = ['gray']
 
@@ -55,14 +60,14 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
         plot_rgb_imgs([originals[idx].cpu(), reconstructions[idx].cpu(), overlays[idx].cpu()], ["original", "reconstructed", "overlay"],
                       save_to=f"{img_dir}/{img_file_hints}_{states[idx]}_{idx}.png", show_img=plt_imgs)
 
-        if writer is not None:
-            for t, im in zip(history["timesteps"], history["images"]):
-                writer.add_images(f"{img_file_hints}_{states[0]}_process", im[idx].unsqueeze(0), t)
+        # if writer is not None:
+            # for t, im in zip(history["timesteps"], history["images"]):
+            #     writer.add_images(f"{img_file_hints}_{states[0]}_process", im[idx].unsqueeze(0), t)
 
             # TODO add logic for diffmap_fl
-            writer.add_images(f"{img_file_hints}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
-                [originals[idx].cpu(), reconstructions[idx].cpu(), gray_to_rgb(diffmaps['diffmap_pl'])[0].cpu(), gray_to_rgb(anomaly_maps[idx].cpu())[0],
-                 gray_to_rgb(gts[idx].cpu())[0]]))
+            # writer.add_images(f"{img_file_hints}_{states[0]}_results (ori, rec, diff, pred, gt)", torch.stack(
+            #     [originals[idx].cpu(), reconstructions[idx].cpu(), gray_to_rgb(diffmaps['diffmap_pl'])[0].cpu(), gray_to_rgb(anomaly_maps[idx].cpu())[0],
+            #      gray_to_rgb(gts[idx].cpu())[0]]))
             # changed for cores data: gray_to_rgb(gts[idx].cpu())[0]
 
 def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
@@ -81,17 +86,24 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
     original_images = original_images.to(model.device)
     generator = torch.Generator(device=pipeline.device).manual_seed(0)
     # run pipeline in inference (sample random noise and denoise)
-    pipe_output = pipeline(
-        batch_size=len(original_images),
-        generator=generator,
-        num_inference_steps=steps_to_regenerate,
-        original_images=original_images,
-        eta=eta,
-        start_at_timestep=start_at_timestep,
-        output_type="torch",
-    )
-    reconstruction = pipe_output.images
-    history = pipe_output.history
+    reconstructed_batches = []
+    # due to VRAM issues, process only 8/24 tiles at one go and untile them afterwards.
+    num_imgs_per_batch = 6
+    for i in range(0, len(original_images), num_imgs_per_batch):
+        pipe_output = pipeline(
+            batch_size=num_imgs_per_batch,
+            generator=generator,
+            num_inference_steps=steps_to_regenerate,
+            original_images=original_images[i:i + num_imgs_per_batch],
+            eta=eta,
+            start_at_timestep=start_at_timestep,
+            output_type="torch",
+        )
+        reconstructed_patch = pipe_output.images
+        reconstructed_batches.extend(reconstructed_patch)
+        # history = pipe_output.history
+    reconstruction = torch.stack(reconstructed_batches)
+
 
     original = unnormalize_original_img(original_images)
 
@@ -99,6 +111,6 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
     original = tiler.untile(original)
 
     diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size, fl_smoothing_kernel_size)
-    history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
+    # history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]
 
-    return original.cpu(), reconstruction.cpu(), diff_maps, history
+    return original.cpu(), reconstruction.cpu(), diff_maps, None  # history

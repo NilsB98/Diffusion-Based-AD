@@ -116,7 +116,7 @@ def main(args: InferenceArgs, writer: SummaryWriter):
 
     augmentations = transforms.Compose(
         [
-            transforms.Resize(model_config["sample_size"],
+            transforms.Resize((train_arg_config["resolution_h"], train_arg_config["resolution_w"]),
                               interpolation=transforms.InterpolationMode.BILINEAR) if not args.patch_imgs else transforms.Lambda(
                 lambda x: x),
             transforms.ToTensor(),
@@ -141,9 +141,10 @@ def main(args: InferenceArgs, writer: SummaryWriter):
     model.eval()
     model.to(args.device)
 
-    extractor = feature_extraction.ResNetFE(args.extractor_path)
-    extractor.eval()
-    extractor.to(args.device)
+    # extractor = feature_extraction.ResNetFE(args.extractor_path)
+    # extractor.eval()
+    # extractor.to(args.device)
+    extractor = None
 
     # gaussian kernel to smoothen the diff-map with
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
