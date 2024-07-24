@@ -111,7 +111,7 @@ def parse_args() -> TrainArgs:
 def transform_imgs_test(imgs, args):
     augmentations = transforms.Compose(
         [
-            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution, args.resolution), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -123,7 +123,7 @@ def transform_imgs_test(imgs, args):
 def transform_imgs_train(imgs, args):
     augmentations = transforms.Compose(
         [
-            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution, args.resolution), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.RandomRotation(args.rotate),
             transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
@@ -148,7 +148,9 @@ def main(args: TrainArgs, writer: SummaryWriter):
     # ----------- set model, optimizer, scheduler -----------------
     channel_multiplier = {
         128: (128, 128, 256, 384, 512),
-        256: (128, 128, 256, 256, 512, 512)
+        256: (128, 128, 256, 256, 512, 512),
+        512: (128, 128, 256, 384, 512),
+        1024: (128, 128, 256, 384, 512),
     }
     down_blocks = ["DownBlock2D" for _ in channel_multiplier[args.resolution]]
     down_blocks[-2] = "AttnDownBlock2D"

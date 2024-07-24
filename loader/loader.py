@@ -67,7 +67,7 @@ class MVTecDataset(Dataset):
     def _transform_gt(self, imgs, target_size):
         augmentations = transforms.Compose(
             [
-                transforms.Resize(target_size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.Resize((target_size, target_size), interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.ToTensor()
             ]
         )
