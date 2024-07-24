@@ -66,7 +66,9 @@ class MetaArgs:
     feature_threshold: float
 
     # general config
-    resolution: int
+    resolution_w: int
+    resolution_h: int
+    resolution_tile: int
     use_patching_approach: bool
     device: str
     plt_imgs: bool
@@ -198,9 +200,14 @@ def parse_args():
                         help='Plot the images with matplot lib. I.e. call plt.show()')
     parser.add_argument('--patching', action='store_true', dest='use_patching_approach',
                         help='If the image size is larger than the models input, split input into multiple patches and stitch it together afterwards.')
-    parser.add_argument('--resolution', type=int, default=256, help='Resolution of the images. Either resized or cropped.')
     parser.add_argument('--run_id', type=str, required=True,
                         help='Id of the run. The created checkpoint- and log directory will be named like this.')
+    parser.add_argument('--resolution_w', type=int, default=2656,
+                        help='resolution width of the images to generate (dataset will be resized to this resolution during training)')
+    parser.add_argument('--resolution_h', type=int, default=2004,
+                        help='resolution height of the images to generate (dataset will be resized to this resolution during training)')
+    parser.add_argument('--resolution_tile', type=int, default=512,
+                        help='tile resolution internal process (dataset will be resized to this resolution during training)')
 
     # diffmap config
     parser.add_argument('--pl_contrib', type=float, default=0.7,
@@ -210,11 +217,12 @@ def parse_args():
 
     args = MetaArgs(**vars(parser.parse_args()))
 
-    diffusionTrainArgs = train_ddim.TrainArgs(args.diffusion_checkpoint_dir, args.run_id, args.item, args.flip, args.rotate, args.color_jitter, args.resolution, args.epochs_diffusion, args.save_n_epochs, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.log_dir, args.img_dir, args.plt_imgs, args.calc_val_loss, args.extractor_path, args.diffusion_checkpoint_name)
+    diffusionTrainArgs = train_ddim.TrainArgs(args.diffusion_checkpoint_dir, args.run_id, args.item, args.flip, args.rotate, args.color_jitter, args.resolution_w, args.resolution_h, args.resolution_tile, args.epochs_diffusion, args.save_n_epochs, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.log_dir, args.img_dir, args.plt_imgs, args.calc_val_loss, args.extractor_path, args.diffusion_checkpoint_name)
     checkpoint_dir = os.path.join(args.diffusion_checkpoint_dir, args.run_id)
 
-    extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model, args.log_dir, args.run_id)
+    extractorTrainArgs = train_extractor.TrainArgs(checkpoint_dir, args.item, args.flip, args.resolution_tile, args.epochs_extractor, args.dataset_path, args.train_steps, args.beta_schedule, args.device, args.reconstruction_weight, args.eta, args.batch_size, args.noise_kind, args.use_patching_approach, args.diffusion_checkpoint_name, args.extractor_path, args.start_at_timestep, args.steps_to_regenerate, args.train_extractor_on_diff_model, args.log_dir, args.run_id)
 
+    # TODO new resolution and tiling
     evalArgs = inference_ddim.InferenceArgs(args.steps_to_regenerate, args.start_at_timestep, args.reconstruction_weight, args.item, args.item_states, checkpoint_dir, args.diffusion_checkpoint_name, args.run_id, args.log_dir, args.train_steps, args.beta_schedule, args.eta, args.device, args.dataset_path, args.shuffle, args.img_dir, args.plt_imgs, args.use_patching_approach, args.batch_size, args.extractor_path, args.feature_smoothing_kernel, args.feature_threshold, args.pxl_threshold, args.fl_contrib, args.pl_contrib)
 
     return diffusionTrainArgs, extractorTrainArgs, evalArgs, args

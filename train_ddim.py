@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import diffusers
+import numpy as np
 import torch
 from diffusers import DDPMScheduler, UNet2DModel, get_scheduler
 from torch.utils.data import DataLoader
@@ -21,6 +22,7 @@ from pipe.train import train_step
 from pipe.validate import validate_step
 from schedulers.scheduling_ddim import DDIMScheduler
 from utils.files import save_args
+from utils.tiler import Tiler
 
 
 @dataclass
@@ -31,7 +33,9 @@ class TrainArgs:
     flip: bool
     rotate: float
     color_jitter: float
-    resolution: int
+    resolution_w: int
+    resolution_h: int
+    resolution_tile: int
     epochs: int
     save_n_epochs: int
     dataset_path: str
@@ -67,8 +71,12 @@ def parse_args() -> TrainArgs:
                         choices=["bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut",
                                  "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper"],
                         help='name of the item within the MVTec Dataset to train on')
-    parser.add_argument('--resolution', type=int, default=128,
-                        help='resolution of the images to generate (dataset will be resized to this resolution during training)')
+    parser.add_argument('--resolution_w', type=int, default=2656,
+                        help='resolution width of the images to generate (dataset will be resized to this resolution during training)')
+    parser.add_argument('--resolution_h', type=int, default=2004,
+                        help='resolution height of the images to generate (dataset will be resized to this resolution during training)')
+    parser.add_argument('--resolution_tile', type=int, default=512,
+                        help='tile resolution internal process (dataset will be resized to this resolution during training)')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='epochs to train for')
     parser.add_argument('--flip', action='store_true',
@@ -111,7 +119,7 @@ def parse_args() -> TrainArgs:
 def transform_imgs_test(imgs, args):
     augmentations = transforms.Compose(
         [
-            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution, args.resolution), interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution_h, args.resolution_w), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -123,7 +131,7 @@ def transform_imgs_test(imgs, args):
 def transform_imgs_train(imgs, args):
     augmentations = transforms.Compose(
         [
-            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution, args.resolution), interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.RandomCrop(args.resolution) if args.crop else transforms.Resize((args.resolution_h, args.resolution_w), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if args.flip else transforms.Lambda(lambda x: x),
             transforms.RandomRotation(args.rotate),
             transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter),
@@ -140,10 +148,14 @@ def main(args: TrainArgs, writer: SummaryWriter):
     # -------------      load data      ------------
     data_train = MVTecDataset(args.dataset_path, True, args.mvtec_item, ["good"],
                               lambda x: transform_imgs_train(x, args))
+    print("data_train done")
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
+    print("train_loader done")
     test_data = MVTecDataset(args.dataset_path, False, args.mvtec_item, ["all"],
                              lambda x: transform_imgs_test(x, args))
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+
+    print("Data loaders set up")
 
     # ----------- set model, optimizer, scheduler -----------------
     channel_multiplier = {
@@ -152,23 +164,24 @@ def main(args: TrainArgs, writer: SummaryWriter):
         512: (128, 128, 256, 384, 512),
         1024: (128, 128, 256, 384, 512),
     }
-    down_blocks = ["DownBlock2D" for _ in channel_multiplier[args.resolution]]
+    down_blocks = ["DownBlock2D" for _ in channel_multiplier[args.resolution_tile]]
     down_blocks[-2] = "AttnDownBlock2D"
-    up_blocks = ["UpBlock2D" for _ in channel_multiplier[args.resolution]]
+    up_blocks = ["UpBlock2D" for _ in channel_multiplier[args.resolution_tile]]
     up_blocks[1] = "AttnUpBlock2D"
 
     model_args = {
-        "sample_size": args.resolution,
+        "sample_size": args.resolution_tile,
         "in_channels": 3,
         "out_channels": 3,
         "layers_per_block": 2,
-        "block_out_channels": channel_multiplier[args.resolution],
+        "block_out_channels": channel_multiplier[args.resolution_tile],
         "down_block_types": down_blocks,
         "up_block_types": up_blocks
     }
     model = UNet2DModel(
         **model_args
     )
+    print("model initialized")
 
     noise_scheduler = DDPMScheduler(args.train_steps, beta_schedule=args.beta_schedule)
     inf_noise_scheduler = DDIMScheduler(args.train_steps, 150,
@@ -195,6 +208,7 @@ def main(args: TrainArgs, writer: SummaryWriter):
     diffmap_blur = transforms.GaussianBlur(2 * int(4 * 4 + 0.5) + 1, 4)
     print(diffusers.utils.logging.is_progress_bar_enabled())
     diffusers.utils.logging.disable_progress_bar()
+    tiler = Tiler(args.resolution_tile, args.resolution_tile) # Tiler(args.resolution, args.resolution)
 
     # -----------------     train loop   -----------------
     print("**** starting training *****")
@@ -213,25 +227,31 @@ def main(args: TrainArgs, writer: SummaryWriter):
         running_loss_train = 0
 
         for btc_num, (batch, _) in enumerate(train_loader):
-            loss = train_step(model, batch, noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
+            batch = tiler.tile(batch)
+            shuffled_idxs = np.random.permutation(np.arange(len(batch)))
+            #loss = train_step(model, batch[shuffled_idxs][:2], noise_scheduler, lr_scheduler, loss_fn, optimizer, args.train_steps, args.noise_kind)
 
-            running_loss_train += loss
+            #running_loss_train += loss
             progress_bar.update(1)
 
         running_loss_test = 0
         with torch.no_grad():
-            for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
-                loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn, args.noise_kind) if args.calc_val_loss else 0
+            if args.calc_val_loss:
+                for _btc_num, (_batch, _labels, gts) in enumerate(test_loader):
+                    loss = validate_step(model, _batch, noise_scheduler, args.train_steps, loss_fn, args.noise_kind)
 
-                running_loss_test += loss
+                    running_loss_test += loss
 
-                progress_bar.update(1)
+                    progress_bar.update(1)
 
             if epoch % 50 == 0:
                 # only for last batch
-                pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_btc{_btc_num}", _batch, model,
+                model.eval()
+                _batch, _labels, gts = next(iter(test_loader))
+                pipe.inference.run_inference_step(None, diffmap_blur, None, gts, f"ep{epoch}_last_btc", _batch, model,
                                                   args.noise_kind, inf_noise_scheduler, _labels, writer, args.eta, 25,
                                                   250, args.crop, args.plt_imgs, os.path.join(args.img_dir, args.run_name, "train_results"))    # 30/150
+                model.train()
 
 
             progress_bar.set_postfix_str(

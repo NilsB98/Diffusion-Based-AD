@@ -7,6 +7,7 @@ from pipeline_reconstruction_ddim import DDIMReconstructionPipeline
 from utils import diffmap
 from utils.diffmap import create_diffmaps
 from utils.metrics import scores_batch
+from utils.tiler import Tiler
 from utils.visualize import add_batch_overlay, plot_single_channel_imgs, plot_rgb_imgs, gray_to_rgb, \
     split_batch_into_patch, unnormalize_original_img, stitch_batch_patches, output_to_img
 
@@ -67,8 +68,9 @@ def run_inference_step(extractor, diffmap_blur, eval_scores, gts, img_file_hints
 def generate_samples(model, noise_scheduler, extractor, original_images, eta, steps_to_regenerate, start_at_timestep,
                      patch_imgs=False, noise_kind='gaussian', fl_smoothing_kernel_size=3):
     num_imgs = len(original_images)
-    if patch_imgs:
-        original_images = split_batch_into_patch(original_images, model.sample_size)
+
+    tiler = Tiler(512, 512)  # TODO pass args
+    original_images = tiler.tile(original_images)
 
     pipeline = DDIMReconstructionPipeline(
         unet=model,
@@ -93,9 +95,8 @@ def generate_samples(model, noise_scheduler, extractor, original_images, eta, st
 
     original = unnormalize_original_img(original_images)
 
-    if patch_imgs:
-        reconstruction = stitch_batch_patches(reconstruction, num_imgs)
-        original = stitch_batch_patches(original, num_imgs)
+    reconstruction = tiler.untile(reconstruction)
+    original = tiler.untile(original)
 
     diff_maps = create_diffmaps(original, reconstruction, extractor, model.sample_size, fl_smoothing_kernel_size)
     history["images"] = [output_to_img(output, num_imgs) for output in history["images"]]

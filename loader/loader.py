@@ -6,21 +6,30 @@ from torch.utils.data import Dataset
 from PIL import Image
 from pathlib import Path
 from torchvision import transforms
+from tqdm import tqdm
 
 
 class MVTecDataset(Dataset):
     def __init__(self, path: str, train: bool, piece: str, states: List[str], transform:callable = None):
         self.transform = transform
         self.train = train
-        self.imgs, self.ground_truths, self.obj_states, self.original_imgs = self._load_data(path, train, piece, states)
+        self.all_gt_paths, self.all_obj_states, self.all_img_paths = self._load_data(path, train, piece, states)
 
     def __len__(self):
-        return len(self.imgs)
+        return len(self.all_img_paths)
 
     def __getitem__(self, idx):
+        img = Image.open(self.all_img_paths[idx])
+        img = self.transform([img])[0]
+        state = self.all_obj_states[idx]
+
         if self.train:
-            return self.imgs[idx], self.obj_states[idx]
-        return self.imgs[idx], self.obj_states[idx], self.ground_truths[idx]
+            return img, state
+
+        gt = Image.open(self.all_gt_paths[idx]) if self.all_gt_paths[idx] is not None else Image.new('L', img.shape[1:])
+        gt = self._transform_gt([gt], img.shape[1], img.shape[0])
+        return img, state, gt
+
 
     def _load_data(self, path: str, train: bool, piece: str, states: List[str]):
 
@@ -58,19 +67,18 @@ class MVTecDataset(Dataset):
                     gt_paths = [p for p in (gt_path / state).rglob("*.png")]
                     all_gt_paths.extend(gt_paths)
 
-        piece_imgs = [Image.open(img) for img in all_img_paths]
-        tranformed_imgs:List[torch.Tensor] = self.transform(piece_imgs) if self.transform is not None else piece_imgs
-        gt_images = [Image.open(img) if img is not None else Image.new('L', tranformed_imgs[0].shape[1:]) for img in all_gt_paths]
-        gt_images = self._transform_gt(gt_images, tranformed_imgs[0].shape[1])
-        return tranformed_imgs, gt_images, all_states, piece_imgs
+        self.all_states = all_states
+        self.all_gt_paths = all_gt_paths
+        self.all_img_paths = all_img_paths
+        return all_gt_paths, all_states, all_img_paths
 
-    def _transform_gt(self, imgs, target_size):
+    def _transform_gt(self, imgs, target_size_h, target_size_w):
         augmentations = transforms.Compose(
             [
-                transforms.Resize((target_size, target_size), interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.Resize((target_size_h, target_size_w), interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.ToTensor()
             ]
         )
 
-        return [augmentations(image) if image is not None else torch.zeros((3, target_size, target_size)) for image in imgs]
+        return [augmentations(image) if image is not None else torch.zeros((3, target_size_h, target_size_w)) for image in imgs]
 
